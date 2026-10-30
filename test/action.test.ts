@@ -104,6 +104,20 @@ suite('example workflows', () => {
 		match(preview, /target: \$\{\{ vars\.HARPER_PREVIEW_TARGET \}\}/);
 	});
 
+	test('the Actions policy allows exactly what the preview workflow needs', () => {
+		const policy = JSON.parse(read('examples/preview-actions-policy.json'));
+		deepStrictEqual(Object.keys(policy).sort(), ['conditions', 'enforcement', 'name', 'rules']);
+		strictEqual(policy.enforcement, 'active');
+		deepStrictEqual(policy.conditions.workflow_path, {
+			include: ['.github/workflows/preview.yaml'],
+			exclude: [],
+		});
+		deepStrictEqual(policy.rules, [
+			{ type: 'restrict_action_events', parameters: { allowed_events: ['pull_request_target'] } },
+		]);
+		ok(readme.includes('main/examples/preview-actions-policy.json'));
+	});
+
 	test('the production workflow matches what `harper deploy setup=true` pins', () => {
 		const [deploy] = examples;
 		match(deploy, /environment: production/);
