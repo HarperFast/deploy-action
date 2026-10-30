@@ -25,6 +25,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: test/e2e/start-harper.sh
+      - run: test/e2e/trust-deploy.sh
       - name: Deploy a payload through action.yml
         uses: ./
         with:

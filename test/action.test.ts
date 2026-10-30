@@ -46,6 +46,38 @@ suite('action.yml', () => {
 	});
 });
 
+suite('the pull_request_target self-test', () => {
+	const workflow = read('.github/workflows/preview.yaml');
+
+	test('never brings a PR onto the runner that holds the identity', () => {
+		const checkouts = [...workflow.matchAll(/uses: actions\/checkout@\S+.*\n(?: {8}.*\n)*/g)].map(([step]) => step);
+		strictEqual(checkouts.length, 2);
+		for (const checkout of checkouts) doesNotMatch(checkout, /\bref:|\brepository:/);
+		doesNotMatch(workflow, /\bgit\b/);
+		for (const step of workflow.split('uses: ./').slice(1)) {
+			match(step, /by_ref: false\n {10}path: test\/e2e\/app/);
+		}
+	});
+
+	test('runs only for this repository, in the environments the policies pin', () => {
+		const conditions = [...workflow.matchAll(/^ {4}if: (.*)$/gm)].map(([, condition]) => condition);
+		strictEqual(conditions.length, 2);
+		for (const condition of conditions) {
+			match(condition, /&& github\.event\.pull_request\.head\.repo\.full_name == github\.repository$/);
+		}
+		deepStrictEqual(
+			[...workflow.matchAll(/environment: (\S+)/g)].map(([, name]) => name),
+			['preview', 'preview-cleanup']
+		);
+	});
+
+	test('keeps PR values out of its shell', () => {
+		for (const [, script] of workflow.matchAll(/^ +(?:- )?run: (.*(?:\n +[^\s-].*)*)/gm)) {
+			doesNotMatch(script, /\$\{\{/);
+		}
+	});
+});
+
 suite('example workflows', () => {
 	const examples = ['deploy', 'preview', 'preview-sweep'].map((name) => read(`examples/${name}.yaml`));
 

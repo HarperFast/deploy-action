@@ -31,30 +31,5 @@ HOME="$E2E_ROOT/home" \
 	>"$E2E_ROOT/harper.log" 2>&1 &
 echo "$!" >"$E2E_ROOT/harper.pid"
 
-operation() {
-	curl --silent --show-error --fail-with-body --user "$admin" --header 'Content-Type: application/json' \
-		--data "$1" "$target/"
-	echo
-}
-
 curl --silent --output /dev/null --retry 60 --retry-delay 1 --retry-connrefused --user "$admin" \
 	--header 'Content-Type: application/json' --data '{"operation":"registration_info"}' "$target/"
-
-operation '{"operation":"add_role","role":"e2e-deploy-ci-deploy","permission":{"super_user":false,"operations":["deploy_component","get_deployment","get_job","registration_info"]}}'
-operation '{"operation":"add_user","username":"e2e-deploy-ci-deploy","role":"e2e-deploy-ci-deploy","active":true,"password":"e2e-Deploy-Password1"}'
-
-if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-	operation "$(jq --null-input \
-		--arg audience "$target/" \
-		--arg repository_id "$GITHUB_REPOSITORY_ID" \
-		--arg workflow_ref "$GITHUB_WORKFLOW_REF" \
-		--arg event_name "$GITHUB_EVENT_NAME" \
-		'{
-			operation: "add_oidc_trust",
-			id: "e2e-deploy",
-			issuer: "https://token.actions.githubusercontent.com",
-			audience: $audience,
-			user: "e2e-deploy-ci-deploy",
-			claims: { repository_id: $repository_id, workflow_ref: $workflow_ref, event_name: $event_name }
-		}')"
-fi

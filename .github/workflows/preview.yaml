@@ -1,0 +1,102 @@
+# Runs from main on real pull_request_target events, to test what is merged: the token's claims, the environments, and
+# the policies enable_previews writes. Harper runs on this runner beside the identity, so it deploys the fixture from
+# main, never the PR's code. The comment's URL does not resolve.
+name: Preview self-test
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+    branches: [main]
+permissions: {}
+env:
+  E2E_ROOT: /tmp/harper-e2e
+  E2E_HARPER_VERSION: 5.4.0-alpha.1
+  E2E_APP: self-test
+  E2E_DOMAIN: app.e2e.test
+  E2E_REPOSITORY: ${{ github.repository }}
+  E2E_REPOSITORY_ID: ${{ github.repository_id }}
+  PR: ${{ github.event.pull_request.number }}
+jobs:
+  deploy:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+      deployments: write
+    concurrency:
+      group: harper-preview-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: test/e2e/start-harper.sh
+      - run: test/e2e/enable-previews.sh
+      - id: preview
+        uses: ./
+        with:
+          target: http://127.0.0.1:9925
+          app: ${{ env.E2E_APP }}
+          preview: true
+          by_ref: false
+          path: test/e2e/app
+          domain: ${{ env.E2E_DOMAIN }}
+          harper_version: ${{ env.E2E_HARPER_VERSION }}
+      - name: The preview records the PR's commit
+        if: steps.preview.outputs.outcome == 'deployed'
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: test/e2e/component.sh "$E2E_APP-pr-$PR" | jq --exit-status --arg sha "$SHA" '.preview.sha == $sha'
+      - if: failure()
+        run: tail -n 100 "$E2E_ROOT/harper.log" "$E2E_ROOT/root/log/hdb.log"
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: preview-cleanup
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+      deployments: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: test/e2e/start-harper.sh
+      - run: test/e2e/enable-previews.sh
+      - name: Give cleanup a preview to drop
+        working-directory: test/e2e/app
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          HARPER_CLI_TARGET: http://127.0.0.1:9925
+          HARPER_CLI_USERNAME: e2e-admin
+          HARPER_CLI_PASSWORD: e2e-Admin-Password1
+        run: >-
+          "$E2E_ROOT/cli/node_modules/.bin/harper" preview deploy
+          "app=$E2E_APP" "pr=$PR" "branch=$BRANCH" "domain=$E2E_DOMAIN" check=false
+      - id: preview
+        uses: ./
+        with:
+          target: http://127.0.0.1:9925
+          app: ${{ env.E2E_APP }}
+          preview: true
+          by_ref: false
+          path: test/e2e/app
+          domain: ${{ env.E2E_DOMAIN }}
+          harper_version: ${{ env.E2E_HARPER_VERSION }}
+      - name: The preview is gone
+        if: steps.preview.outputs.outcome == 'dropped'
+        run: test -z "$(test/e2e/component.sh "$E2E_APP-pr-$PR")"
+      - if: failure()
+        run: tail -n 100 "$E2E_ROOT/harper.log" "$E2E_ROOT/root/log/hdb.log"

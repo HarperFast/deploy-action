@@ -33,53 +33,15 @@ const PREVIEW_OPERATIONS = [
 
 const { GITHUB_REPOSITORY_ID, GITHUB_WORKFLOW_REF, GITHUB_EVENT_NAME } = process.env;
 
-async function sendOperation(body: Record<string, unknown>): Promise<{ status: number; body: any }> {
+async function operation(body: Record<string, unknown>): Promise<any> {
 	const response = await fetch(`${TARGET}/`, {
 		method: 'POST',
 		headers: { 'Authorization': ADMIN, 'Content-Type': 'application/json' },
 		body: JSON.stringify(body),
 	});
-	return { status: response.status, body: await response.json() };
-}
-
-async function operation(body: Record<string, unknown>): Promise<any> {
-	const answer = await sendOperation(body);
-	strictEqual(answer.status, 200, `${body.operation}: ${JSON.stringify(answer.body)}`);
-	return answer.body;
-}
-
-/**
- * What `harper preview setup` creates, from `enable_previews` where the server has it. 5.4.0-alpha.1 predates it, so
- * there the same role is written by hand, with the grant constraints that release knows.
- */
-async function enablePreviews(): Promise<void> {
-	const enabled = await sendOperation({
-		operation: 'enable_previews',
-		app: 'shop',
-		repository: REPOSITORY,
-		repository_id: '1',
-		branch: 'main',
-		audience: `${TARGET}/`,
-		hostSuffix: `.${DOMAIN}`,
-	});
-	if (enabled.status === 200) {
-		await operation({ operation: 'alter_user', username: ROLE, password: PREVIEW_PASSWORD });
-		return;
-	}
-	match(JSON.stringify(enabled.body), /Operation 'enable_previews' not found/);
-	await operation({
-		operation: 'add_role',
-		role: ROLE,
-		permission: {
-			super_user: false,
-			operations: PREVIEW_OPERATIONS,
-			component_deploy: {
-				names: ['shop-pr-*'],
-				constraints: { isolated: true, hostSuffix: `.${DOMAIN}`, branchedDatabases: 'required' },
-			},
-		},
-	});
-	await operation({ operation: 'add_user', username: ROLE, role: ROLE, active: true, password: PREVIEW_PASSWORD });
+	const answer = await response.json();
+	strictEqual(response.status, 200, `${body.operation}: ${JSON.stringify(answer)}`);
+	return answer;
 }
 
 /** The token a run exchanges can do what the named trust policy allows, whatever the role allows beyond it. */
@@ -134,7 +96,11 @@ suite('preview lifecycle', () => {
 		};
 	}
 
-	async function runAction(eventName: string, payload: unknown): Promise<Record<string, string>> {
+	async function runAction(
+		eventName: string,
+		payload: unknown,
+		inputs: Record<string, string> = {}
+	): Promise<Record<string, string>> {
 		const eventPath = join(work, 'event.json');
 		const outputPath = join(work, 'output');
 		writeFileSync(eventPath, JSON.stringify(payload));
@@ -153,6 +119,7 @@ suite('preview lifecycle', () => {
 				INPUT_PREVIEW: 'true',
 				INPUT_DOMAIN: DOMAIN,
 				INPUT_GITHUB_TOKEN: 'fake',
+				...inputs,
 				...(HAS_IDENTITY
 					? { HARPER_DEPLOY_ACTION_CLI: join(ROOT, 'cli/node_modules/.bin/harper') }
 					: {
@@ -185,7 +152,16 @@ suite('preview lifecycle', () => {
 			`[url "file://${bare}"]\n\tinsteadOf = https://github.com/${REPOSITORY}.git\n`
 		);
 
-		await enablePreviews();
+		execFileSync(resolve(import.meta.dirname, 'enable-previews.sh'), {
+			env: {
+				...process.env,
+				E2E_APP: 'shop',
+				E2E_REPOSITORY: REPOSITORY,
+				E2E_REPOSITORY_ID: '1',
+				E2E_DOMAIN: DOMAIN,
+				E2E_TARGET: TARGET,
+			},
+		});
 		// It matches the same claims, and an exchange takes the first policy by id.
 		if (HAS_IDENTITY) await operation({ operation: 'drop_oidc_trust', id: 'e2e-deploy' });
 		await trustPolicyAllows(PREVIEW_OPERATIONS);
@@ -273,6 +249,19 @@ suite('preview lifecycle', () => {
 		strictEqual((await runAction('schedule', {})).outcome, 'swept');
 		strictEqual(await component('shop-pr-10'), undefined);
 		ok(await component('shop-pr-11'));
+	});
+
+	test('a directory deployed as a preview records the PR commit', async () => {
+		await trustPolicyAllows(PREVIEW_OPERATIONS);
+		fake.setPullRequest(12, { state: 'open', sha: firstCommit });
+		const output = await runAction('pull_request_target', pullRequestEvent('opened', 12, firstCommit), {
+			INPUT_BY_REF: 'false',
+			INPUT_PATH: resolve(import.meta.dirname, 'app'),
+		});
+		strictEqual(output.outcome, 'deployed');
+		const preview = await component('shop-pr-12');
+		strictEqual(preview.preview.sha, firstCommit);
+		strictEqual(preview.package, undefined);
 	});
 
 	test('a saved admin login does not outrank the identity token', async () => {
