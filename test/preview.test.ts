@@ -136,6 +136,28 @@ suite('runPreview', () => {
 			deepStrictEqual(statesOf(1), ['in_progress', 'success']);
 		});
 
+		test('a retirement that failed partway is finished by the next run', async () => {
+			const push = async (sha: string) => {
+				fake.setPullRequest(12, { state: 'open', sha });
+				const event = pullRequestEvent('synchronize', {
+					head: { ref: 'fix/cart', sha, repo: { full_name: REPOSITORY } },
+				});
+				await runPreview(context(), 'pull_request_target', event);
+			};
+			const latestStates = () => fake.deployments.map((deployment) => deployment.statuses.at(-1)?.state);
+			for (const sha of [SHA, NEWER_SHA, 'c'.repeat(40)]) await push(sha);
+			fake.deployments[0].statuses.push({ state: 'success' });
+			fake.deployments[1].statuses.push({ state: 'success' });
+
+			fake.failNext(new RegExp(`POST /deployments/${fake.deployments[0].id}/statuses`), 500);
+			await push('d'.repeat(40));
+			match(warnings.at(-1) ?? '', /Could not retire earlier GitHub Deployments/);
+			deepStrictEqual(latestStates(), ['success', 'success', 'success', 'success']);
+
+			await push('e'.repeat(40));
+			deepStrictEqual(latestStates(), ['inactive', 'inactive', 'inactive', 'inactive', 'success']);
+		});
+
 		test("leaves another PR's Deployment alone", async () => {
 			await runPreview(context(), 'pull_request_target', pullRequestEvent('opened'));
 			fake.setPullRequest(13, { state: 'open', sha: NEWER_SHA });
@@ -155,6 +177,13 @@ suite('runPreview', () => {
 			await runPreview(context(), 'pull_request_target', pullRequestEvent('opened'));
 			strictEqual(fake.comments.length, 6);
 			match(fake.comments[5].body, /fix-cart/);
+		});
+
+		test('adopts its comment when an App token wrote it', async () => {
+			fake.addComment(12, `${MARKER}\nold`, 'acme-ci[bot]');
+			await runPreview(context(), 'pull_request_target', pullRequestEvent('opened'));
+			strictEqual(fake.comments.length, 1);
+			match(fake.comments[0].body, /fix-cart/);
 		});
 
 		test("does not adopt a stranger's comment that carries the marker", async () => {
@@ -283,6 +312,15 @@ suite('runPreview', () => {
 			match(warnings[0], /Could not check PR #12 after deploying/);
 		});
 
+		test('a cleanup that finished while the success was being reported still has the last word', async () => {
+			fake.setPullRequest(12, { state: 'open', sha: SHA }, { state: 'open', sha: SHA }, { state: 'closed', sha: SHA });
+			const result = await runPreview(context(), 'pull_request_target', pullRequestEvent('opened'));
+			strictEqual(result.outcome, 'dropped');
+			strictEqual(dropsIn(), 1);
+			deepStrictEqual(statesOf(), ['in_progress', 'success', 'inactive']);
+			match(fake.comments[0].body, /preview removed/);
+		});
+
 		test('a failed deploy reports on the Deployment and the comment, and fails the run', async () => {
 			await rejects(
 				runPreview(
@@ -406,10 +444,19 @@ suite('runPreview', () => {
 					'pull_request_target',
 					pullRequestEvent('closed')
 				),
-				/not dropped after 5 attempts/
+				/not dropped after 5 attempts; last, harper preview drop exited with 1/
 			);
 			strictEqual(calls.length, 5);
 			strictEqual(delays.length, 4);
+		});
+
+		test('never drops blind when GitHub cannot say, and says why it gave up', async () => {
+			for (let attempt = 0; attempt < 15; attempt++) fake.failNext(/GET \/pulls\/12/, 500);
+			await rejects(
+				runPreview(context(), 'pull_request_target', pullRequestEvent('closed')),
+				/not dropped after 5 attempts; last, the PR could not be read: GET .* answered 500/
+			);
+			strictEqual(calls.length, 0);
 		});
 
 		test('retries through a GitHub failure rather than dropping blind', async () => {
@@ -458,12 +505,13 @@ suite('runPreview', () => {
 			match(fake.comments[0].body, /preview removed/);
 		});
 
-		test("leaves other applications', other repositories' and misnamed components alone", async () => {
+		test("leaves other applications', other or unrecorded repositories' and misnamed components alone", async () => {
 			fake.setPullRequest(31, { state: 'closed', sha: SHA });
 			const script = listing(
 				{ name: 'shop' },
 				entry(31, { preview: { app: 'docs', pr: 31, repository: REPOSITORY } }),
 				entry(31, { preview: { app: 'shop', pr: 31, repository: 'acme/other' } }),
+				entry(31, { preview: { app: 'shop', pr: 31 } }),
 				entry(31, { name: 'shop-pr-32' })
 			);
 			await runPreview(context(script), 'schedule', {});
@@ -494,6 +542,17 @@ suite('runPreview', () => {
 			});
 			await rejects(runPreview(context(script), 'schedule', {}), /Could not drop shop-pr-51/);
 			strictEqual(dropsIn(), 2);
+		});
+
+		test('fails clearly when the listing is not JSON', async () => {
+			await rejects(
+				runPreview(
+					context(() => ({ stdout: 'name: components' })),
+					'schedule',
+					{}
+				),
+				/printed no JSON/
+			);
 		});
 
 		test('fails when the cluster cannot list', async () => {

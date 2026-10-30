@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,21 +18,35 @@ export type RunHarper = (args: string[], options?: HarperOptions) => Promise<Har
 export interface HarperRunnerOptions {
 	version: string;
 	target: string;
-	/** An installed CLI to run instead of installing `version`. */
 	cliPath?: string;
 	env?: NodeJS.ProcessEnv;
 }
 
 // A configured credential outranks the job's identity token in the CLI, and a blank one disables it.
 const CREDENTIAL_VARIABLE = /^(?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN)$/;
+const DOTENV_CREDENTIAL =
+	/^\s*(?:export\s+)?((?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN))\s*=/m;
 
-export function cliEnvironment(env: NodeJS.ProcessEnv, target: string): NodeJS.ProcessEnv {
-	const filtered: NodeJS.ProcessEnv = {};
-	for (const [name, value] of Object.entries(env)) {
-		if (!CREDENTIAL_VARIABLE.test(name) && !name.startsWith('INPUT_')) filtered[name] = value;
+function withoutInputs(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	return Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('INPUT_')));
+}
+
+/** `home` replaces HOME, where the CLI keeps `harper login` credentials, which also outrank the identity token. */
+export function cliEnvironment(env: NodeJS.ProcessEnv, target: string, home: string): NodeJS.ProcessEnv {
+	const filtered = Object.entries(withoutInputs(env)).filter(([name]) => !CREDENTIAL_VARIABLE.test(name));
+	return { ...Object.fromEntries(filtered), HARPER_CLI_TARGET: target, HOME: home, USERPROFILE: home };
+}
+
+/** The CLI loads `.env` from where it runs, for any variable not already set. */
+async function assertNoDotenvCredentials(directory: string): Promise<void> {
+	const dotenv = await readFile(join(directory, '.env'), 'utf8').catch(() => '');
+	const credential = dotenv.match(DOTENV_CREDENTIAL)?.[1];
+	if (credential) {
+		throw new Error(
+			`${join(directory, '.env')} sets ${credential}, which the CLI would use instead of the identity token. ` +
+				'Leave CLI credentials out of the deployed directory.'
+		);
 	}
-	filtered.HARPER_CLI_TARGET = target;
-	return filtered;
 }
 
 function execute(
@@ -70,20 +84,28 @@ export async function installHarperCli(version: string, env: NodeJS.ProcessEnv):
 			'--no-package-lock',
 			`harper@${version}`,
 		],
-		{ cwd: directory, env }
+		{ cwd: directory, env: withoutInputs(env) }
 	);
 	if (exitCode !== 0) throw new Error(`npm could not install harper@${version}: it exited with ${exitCode}`);
 	return join(directory, 'node_modules', '.bin', 'harper');
 }
 
-/** The CLI is installed on first use, so a run that has nothing to do never installs it. */
+/** Without a `cwd` the CLI runs in an empty directory, where there is no `.env` for it to load. */
 export function createHarperRunner({ version, target, cliPath, env = process.env }: HarperRunnerOptions): RunHarper {
 	let installed: Promise<string> | undefined = cliPath ? Promise.resolve(cliPath) : undefined;
-	return async (args, options = {}) => {
+	let scratch: Promise<{ home: string; work: string }> | undefined;
+	return async (args, { cwd, quiet } = {}) => {
 		if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
 			throw new Error('This job has no identity token: grant it `permissions: id-token: write`');
 		}
+		if (cwd) await assertNoDotenvCredentials(cwd);
 		installed ??= installHarperCli(version, env);
-		return execute(await installed, args, { ...options, env: cliEnvironment(env, target) });
+		scratch ??= mkdtemp(join(env.RUNNER_TEMP ?? tmpdir(), 'harper-run-')).then(async (root) => {
+			const directories = { home: join(root, 'home'), work: join(root, 'work') };
+			await Promise.all([mkdir(directories.home), mkdir(directories.work)]);
+			return directories;
+		});
+		const { home, work } = await scratch;
+		return execute(await installed, args, { cwd: cwd ?? work, quiet, env: cliEnvironment(env, target, home) });
 	};
 }

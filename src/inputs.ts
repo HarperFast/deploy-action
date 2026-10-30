@@ -2,7 +2,23 @@ const APP_NAME = /^[a-zA-Z0-9-_]+$/;
 /** The first release with `harper preview`; `^5.4` would not match it, or any 5.4 prerelease. */
 export const DEFAULT_HARPER_VERSION = '>=5.4.0-alpha.1 <6';
 // The action authenticates with the job's identity token alone, and `target` is its own input.
-const REFUSED_ARGUMENTS = new Set(['target', 'username', 'password', 'auth_username', 'auth_password']);
+const CREDENTIAL_ARGUMENTS = new Set(['target', 'username', 'password', 'auth_username', 'auth_password']);
+// What the action sets itself: the CLI takes the last value, so an argument could deploy another commit or preview.
+const ACTION_ARGUMENTS = new Set([
+	'project',
+	'app',
+	'pr',
+	'branch',
+	'by_ref',
+	'ref',
+	'sha',
+	'restart',
+	'credential',
+	'domain',
+	'label',
+	'ttl',
+	'branchedDatabases',
+]);
 
 export interface Inputs {
 	target: string;
@@ -64,9 +80,11 @@ function extraArguments(env: NodeJS.ProcessEnv): string[] {
 	return lines.filter(Boolean).map((line) => {
 		const separator = line.indexOf('=');
 		if (separator < 1) throw new Error(`Input args takes one key=value per line, got ${JSON.stringify(line)}`);
-		if (REFUSED_ARGUMENTS.has(line.slice(0, separator))) {
-			throw new Error(`Input args cannot set ${line.slice(0, separator)}: this action authenticates with OIDC only`);
+		const key = line.slice(0, separator);
+		if (CREDENTIAL_ARGUMENTS.has(key)) {
+			throw new Error(`Input args cannot set ${key}: this action authenticates with OIDC only`);
 		}
+		if (ACTION_ARGUMENTS.has(key)) throw new Error(`Input args cannot set ${key}: the action sets it`);
 		return line;
 	});
 }

@@ -66,4 +66,13 @@ suite('readInputs', () => {
 		}
 		throws(() => readInputs({ ...required, INPUT_ARGS: 'deploy' }), /one key=value per line/);
 	});
+
+	test('args cannot override what the action sets, such as the commit or the preview', () => {
+		for (const key of ['project', 'app', 'pr', 'branch', 'by_ref', 'ref', 'sha', 'restart', 'domain', 'ttl']) {
+			throws(
+				() => readInputs({ ...required, INPUT_ARGS: `${key}=x` }),
+				new RegExp(`cannot set ${key}: the action sets it`)
+			);
+		}
+	});
 });

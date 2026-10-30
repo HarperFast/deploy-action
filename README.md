@@ -126,7 +126,7 @@ The PR comment and the Deployment are best effort: if either fails, the run warn
 
 ### Why two jobs
 
-Required reviewers on the `preview` environment gate every deploy, which you want when previews share a cluster with production. They must not gate cleanup, or a closed PR's preview waits for an approval. So cleanup runs in `preview-cleanup`, which should have no required reviewers, under a policy that can only drop.
+Required reviewers on the `preview` environment gate every deploy, which you want when previews share a cluster with production. They must not gate cleanup, or a closed PR's preview waits for an approval. So cleanup runs in `preview-cleanup`, which should have no required reviewers, under a policy that can only drop. It also stays out of the deploy's concurrency group, where a deploy waiting for approval would hold it up. A deploy that is still running when the PR closes drops its own preview when it finishes.
 
 In **Settings > Environments**, allow your default branch under **Deployment branches and tags** on both environments.
 
@@ -202,27 +202,27 @@ To keep previews working in a public repository, allow the event for this workfl
 
 ## Inputs
 
-| Input                    | Default              | Description                                                                                                  |
-| ------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `target`                 | required             | The cluster's operations API URL. The trust policy's audience has to match it.                               |
-| `app`                    | required             | The application's component name.                                                                            |
-| `preview`                | `false`              | Run the preview lifecycle instead of a normal deploy.                                                        |
-| `path`                   | `.`                  | The directory to deploy as a payload, when not deploying by reference.                                       |
-| `by_ref`                 | see description      | Have the cluster fetch the commit. Defaults to `true` for previews and when `ref` is set, otherwise `false`. |
-| `ref`                    |                      | The commit, branch or tag to deploy by reference. Previews always deploy the PR's head commit.               |
-| `restart`                | `rolling`            | How a normal deploy restarts Harper, as the CLI's `restart=` argument.                                       |
-| `credential`             | `false`              | Use the sealed git credential to fetch a private repository.                                                 |
-| `domain`                 | `app.<target host>`  | The preview domain.                                                                                          |
-| `label`                  |                      | A DNS label added to the preview host, to tell apart previews of several applications on one cluster.        |
-| `ttl`                    | the CLI's, 7 days    | Days until the cluster expires the preview, capped by the application's `maxTtlDays`.                        |
-| `branched_databases`     | `true`               | Give each preview its own database branch. `false` shares the cluster's data.                                |
-| `comment`                | `true`               | Keep one PR comment with the preview URL.                                                                    |
-| `github_deployment`      | `true`               | Record each preview as a GitHub Deployment.                                                                  |
-| `deployment_environment` | `<app>-preview`      | The GitHub environment for those Deployments.                                                                |
-| `args`                   |                      | More CLI arguments for the deploy, one `key=value` per line.                                                 |
-| `harper_version`         | `>=5.4.0-alpha.1 <6` | The npm version or range of the `harper` CLI.                                                                |
-| `node_version`           | `24`                 | The Node.js version for the CLI. Empty uses the one on the runner, which must be 22.18 or later.             |
-| `github_token`           | `github.token`       | The token for PR comments and Deployments.                                                                   |
+| Input                    | Default              | Description                                                                                                             |
+| ------------------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `target`                 | required             | The cluster's operations API URL. The trust policy's audience has to match it.                                          |
+| `app`                    | required             | The application's component name.                                                                                       |
+| `preview`                | `false`              | Run the preview lifecycle instead of a normal deploy.                                                                   |
+| `path`                   | `.`                  | The directory to deploy as a payload, when not deploying by reference.                                                  |
+| `by_ref`                 | see description      | Have the cluster fetch the commit. Defaults to `true` for previews and when `ref` is set, otherwise `false`.            |
+| `ref`                    |                      | The commit, branch or tag to deploy by reference. Previews always deploy the PR's head commit.                          |
+| `restart`                | `rolling`            | How a normal deploy restarts Harper, as the CLI's `restart=` argument.                                                  |
+| `credential`             | `false`              | Use the sealed git credential to fetch a private repository.                                                            |
+| `domain`                 | `app.<target host>`  | The preview domain.                                                                                                     |
+| `label`                  |                      | A DNS label added to the preview host, to tell apart previews of several applications on one cluster.                   |
+| `ttl`                    | the CLI's, 7 days    | Days until the cluster expires the preview, capped by the application's `maxTtlDays`.                                   |
+| `branched_databases`     | `true`               | Give each preview its own database branch. `false` shares the cluster's data.                                           |
+| `comment`                | `true`               | Keep one PR comment with the preview URL.                                                                               |
+| `github_deployment`      | `true`               | Record each preview as a GitHub Deployment.                                                                             |
+| `deployment_environment` | `<app>-preview`      | The GitHub environment for those Deployments.                                                                           |
+| `args`                   |                      | More CLI arguments for the deploy, one `key=value` per line.                                                            |
+| `harper_version`         | `>=5.4.0-alpha.1 <6` | The npm version or range of the `harper` CLI.                                                                           |
+| `node_version`           | `24`                 | The Node.js version for the CLI, left on `PATH` for later steps. Empty uses the runner's, which must be 22.18 or later. |
+| `github_token`           | `github.token`       | The token for PR comments and Deployments.                                                                              |
 
 ## Outputs
 
@@ -245,9 +245,9 @@ Start from `permissions: {}` at the top of the workflow, as the examples do. A n
 
 - **The workflow is trusted, not the PR.** Preview jobs run from the default branch and never check out PR code, and the action refuses `preview: true` on `pull_request`. The trust policy pins the workflow file, the branch, `pull_request_target` and the environment.
 - **Forks never get the identity.** The `if:` on each job is the gate: no token claim names the head repository. The action also skips a fork itself.
-- **The PR's code still runs on the cluster**, with the preview role's rights. That role can deploy and drop only that application's `<app>-pr-<n>` previews. Without `branched_databases: false`, a preview's writes stay in its own database branch. An application that reaches the bare `databases` or `tables` globals writes to the shared data.
+- **The PR's code still runs on the cluster**, with the preview role's rights. That role can deploy and drop only that application's `<app>-pr-<n>` previews. Without `branched_databases: false`, a preview's writes stay in its own database branch, except in the `system` database (users and roles), which cannot be branched.
 - **A preview is the same site as what production serves from the cluster's host name.** Use `__Host-` cookie names and CSRF or `Origin` checks there.
-- **OIDC only.** The action strips `HARPER_CLI_*` and `CLI_TARGET_*` credentials from the CLI's environment, and refuses them in `target` and `args`.
+- **OIDC only.** The CLI would prefer any other credential to the identity token. So the action strips `HARPER_CLI_*` and `CLI_TARGET_*` credentials from its environment and refuses them in `target` and `args`. It gives the CLI an empty home directory, where no `harper login` is saved, and refuses a deployed directory whose `.env` sets one. Preview runs start the CLI in an empty directory.
 - **The CLI is installed fresh, into an empty directory, with install scripts off**, so a project's `.npmrc` has no say in it.
 
 ## Limitations

@@ -33,13 +33,50 @@ suite('harper CLI', () => {
 				HARPER_CLI_TARGET: 'https://other.example.com/',
 				...identity,
 			},
-			'https://cluster.example.com:9925/'
+			'https://cluster.example.com:9925/',
+			'/empty/home'
 		);
 		deepStrictEqual(env, {
 			PATH: '/bin',
 			HARPER_CLI_TARGET: 'https://cluster.example.com:9925/',
+			HOME: '/empty/home',
+			USERPROFILE: '/empty/home',
 			...identity,
 		});
+	});
+
+	test('gives the CLI an empty home, where no `harper login` credentials are saved', async () => {
+		const cliPath = executable(
+			join(scratch(), 'harper'),
+			`const fs = require('node:fs');
+console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), process.env.USERPROFILE]));`
+		);
+		const temp = scratch();
+		const run = createHarperRunner({
+			version: 'unused',
+			target: 'https://cluster.example.com/',
+			cliPath,
+			env: { ...process.env, ...identity, HOME: '/home/runner', RUNNER_TEMP: temp },
+		});
+		const [home, listing, profile] = JSON.parse((await run(['preview', 'list'], { quiet: true })).stdout);
+		ok(home.startsWith(temp), home);
+		deepStrictEqual(listing, []);
+		strictEqual(profile, home);
+	});
+
+	test('refuses a deployed directory whose .env holds a CLI credential, and allows one without', async () => {
+		const cliPath = executable(join(scratch(), 'harper'), `console.log('ran');`);
+		const run = createHarperRunner({
+			version: 'unused',
+			target: 'https://cluster.example.com/',
+			cliPath,
+			env: { ...process.env, ...identity, RUNNER_TEMP: scratch() },
+		});
+		const payload = scratch();
+		writeFileSync(join(payload, '.env'), 'DATABASE_URL=x\n  export HARPER_CLI_OPERATION_TOKEN = abc\n');
+		await rejects(run(['deploy'], { cwd: payload, quiet: true }), /\.env sets HARPER_CLI_OPERATION_TOKEN/);
+		writeFileSync(join(payload, '.env'), 'DATABASE_URL=x\n# HARPER_CLI_PASSWORD=old\n');
+		strictEqual((await run(['deploy'], { cwd: payload, quiet: true })).stdout.trim(), 'ran');
 	});
 
 	test('reports the exit code and stdout, and keeps a quiet command out of the log', async (context) => {
@@ -61,6 +98,24 @@ suite('harper CLI', () => {
 		match(result.stdout, /^preview list true/);
 		const logged = write.mock.calls.filter((call) => String(call.arguments[0]).includes('preview list'));
 		strictEqual(logged.length, 0);
+	});
+
+	test('runs in an empty directory unless told where, so no workspace .env reaches the CLI', async () => {
+		const cliPath = executable(
+			join(scratch(), 'harper'),
+			`console.log(JSON.stringify(require('node:fs').readdirSync('.')), process.cwd());`
+		);
+		const temp = scratch();
+		const run = createHarperRunner({
+			version: 'unused',
+			target: 'https://cluster.example.com/',
+			cliPath,
+			env: { ...process.env, ...identity, RUNNER_TEMP: temp },
+		});
+		const { stdout } = await run(['preview', 'drop'], { quiet: true });
+		const [listing, cwd] = stdout.trim().split(' ');
+		strictEqual(listing, '[]');
+		ok(realpathSync(cwd).startsWith(temp), cwd);
 	});
 
 	test('passes a value with shell metacharacters as one argument', async () => {
@@ -86,7 +141,7 @@ suite('harper CLI', () => {
 		const home = scratch();
 		const npm = executable(
 			join(home, 'bin', 'npm'),
-			`require('node:fs').appendFileSync(process.env.NPM_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + '\\n');
+			`require('node:fs').appendFileSync(process.env.NPM_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), token: process.env.INPUT_GITHUB_TOKEN }) + '\\n');
 const prefix = process.argv[process.argv.indexOf('--prefix') + 1];
 require('node:fs').mkdirSync(prefix + '/node_modules/.bin', { recursive: true });
 require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/bin/env node\\n', { mode: 0o755 });`
@@ -97,6 +152,7 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 			NPM_LOG: join(home, 'npm.log'),
 			PATH: `${dirname(npm)}${delimiter}${process.env.PATH}`,
 			RUNNER_TEMP: home,
+			INPUT_GITHUB_TOKEN: 'secret',
 		};
 		const run = createHarperRunner({ version: '>=5.4.0-alpha.1 <6', target: 'https://x/', env });
 		await run(['one']);
@@ -108,6 +164,7 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 			.map((line) => JSON.parse(line));
 		strictEqual(installs.length, 1);
 		ok(installs[0].args.includes('--ignore-scripts'));
+		strictEqual(installs[0].token, undefined);
 		ok(installs[0].args.includes('harper@>=5.4.0-alpha.1 <6'));
 		strictEqual(installs[0].cwd, installs[0].args[installs[0].args.indexOf('--prefix') + 1]);
 	});

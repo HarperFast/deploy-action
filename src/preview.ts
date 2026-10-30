@@ -8,7 +8,6 @@ import type { WorkflowLog } from './workflowCommands.ts';
 const CLEANUP_ATTEMPTS = 5;
 const CLEANUP_RETRY_MS = 30_000;
 const PREVIEW_URL = /^Preview: (\S+)$/m;
-const ACTIONS_BOT = 'github-actions[bot]';
 const TRUSTED_COMMENTERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
 export interface PreviewContext {
@@ -62,8 +61,9 @@ async function bestEffort<T>(context: PreviewContext, what: string, attempt: () 
 	}
 }
 
+/** A bot comments only through an App installed on the repository, as the default token does; a stranger cannot. */
 function isOurComment(comment: IssueComment, marker: string): boolean {
-	const trusted = comment.user?.login === ACTIONS_BOT || TRUSTED_COMMENTERS.has(comment.author_association ?? 'NONE');
+	const trusted = comment.user?.type === 'Bot' || TRUSTED_COMMENTERS.has(comment.author_association ?? 'NONE');
 	return trusted && Boolean(comment.body?.startsWith(marker));
 }
 
@@ -115,16 +115,23 @@ async function finishDeployment(context: PreviewContext, id: number | undefined,
 	);
 }
 
-/** Stops at the first inactive one: everything older was retired when it was superseded. */
+/**
+ * Everything older than an inactive Deployment is inactive, so the scan stops at the first one. Retiring oldest first
+ * keeps that true when a run fails partway.
+ */
 async function retireDeployments(context: PreviewContext, pullRequest: number, keep?: number): Promise<void> {
 	const { github, inputs, runUrl } = context;
 	if (!inputs.githubDeployment) return;
 	await bestEffort(context, 'retire earlier GitHub Deployments', async () => {
 		const task = deploymentTask(inputs.app, pullRequest);
+		const active: number[] = [];
 		for await (const deployment of github.deployments(task, inputs.deploymentEnvironment)) {
 			if (deployment.id === keep) continue;
-			if ((await github.latestDeploymentStatus(deployment.id))?.state === 'inactive') return;
-			await github.setDeploymentStatus(deployment.id, {
+			if ((await github.latestDeploymentStatus(deployment.id))?.state === 'inactive') break;
+			active.push(deployment.id);
+		}
+		for (const id of active.reverse()) {
+			await github.setDeploymentStatus(id, {
 				state: 'inactive',
 				description: `Preview of ${inputs.app} retired`,
 				log_url: runUrl,
@@ -146,12 +153,14 @@ function dropArguments(app: string, pullRequest: number): string[] {
 /** A deploy still holding the preview answers 409 until it finishes, so a failed drop is retried; a reopened PR keeps its preview. */
 async function dropClosedPreview(context: PreviewContext, pullRequest: number): Promise<ActionResult> {
 	const { github, harper, inputs, log, sleep } = context;
+	let lastFailure = '';
 	for (let attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++) {
 		if (attempt > 1) await sleep(CLEANUP_RETRY_MS);
 		let state: string;
 		try {
 			({ state } = await github.pullRequest(pullRequest));
 		} catch (error) {
+			lastFailure = `the PR could not be read: ${(error as Error).message}`;
 			log.warning(`Could not read PR #${pullRequest}: ${(error as Error).message}`);
 			continue;
 		}
@@ -164,8 +173,11 @@ async function dropClosedPreview(context: PreviewContext, pullRequest: number): 
 			await reportRemoved(context, pullRequest);
 			return { outcome: 'dropped' };
 		}
+		lastFailure = `harper preview drop exited with ${exitCode}`;
 	}
-	throw new Error(`The preview of PR #${pullRequest} was not dropped after ${CLEANUP_ATTEMPTS} attempts`);
+	throw new Error(
+		`The preview of PR #${pullRequest} was not dropped after ${CLEANUP_ATTEMPTS} attempts; last, ${lastFailure}`
+	);
 }
 
 function previewDeployArguments({ inputs }: PreviewContext, pullRequest: PullRequestEvent): string[] {
@@ -233,13 +245,23 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 		`**\`${inputs.app}\` preview:** ${url ?? 'deployed'}\n\n` +
 		`Commit \`${short(sha)}\`, [workflow run](${runUrl}). It updates on each push and is removed when this PR closes.`;
 	await postComment(context, number, message, { create: true });
+	// A cleanup that ran while this reported could have finished first, leaving the report above as the last word.
+	if (await closedMeanwhile(context, number)) {
+		const { outcome } = await dropClosedPreview(context, number);
+		if (outcome === 'dropped') return { outcome };
+	}
 	return { outcome: 'deployed', url };
 }
 
 async function listPreviews({ harper, inputs }: PreviewContext): Promise<ListedPreview[]> {
 	const { exitCode, stdout } = await harper(['get_components', 'json=true'], { quiet: true });
 	if (exitCode !== 0) throw new Error(`harper get_components exited with ${exitCode}`);
-	const entries: ListedPreview[] = JSON.parse(stdout).entries ?? [];
+	let entries: ListedPreview[];
+	try {
+		entries = JSON.parse(stdout).entries ?? [];
+	} catch (cause) {
+		throw new Error('harper get_components json=true printed no JSON', { cause });
+	}
 	return entries.filter((entry) => entry.preview?.app === inputs.app);
 }
 
@@ -250,7 +272,8 @@ async function sweepPreviews(context: PreviewContext): Promise<ActionResult> {
 	for (const { name, preview } of await listPreviews(context)) {
 		const pullRequest = preview?.pr;
 		if (typeof pullRequest !== 'number' || name !== `${inputs.app}-pr-${pullRequest}`) continue;
-		if (preview?.repository && preview.repository !== repository) continue;
+		// Another repository's PR numbers say nothing about this one's, and the CLI records the repository on every CI deploy.
+		if (preview?.repository !== repository) continue;
 		let state: string;
 		try {
 			({ state } = await github.pullRequest(pullRequest));

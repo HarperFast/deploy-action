@@ -41,7 +41,7 @@ suite('runDeploy', () => {
 			'ref=abc123',
 			'credential=true',
 		]);
-		strictEqual(harper.calls[0].options?.cwd, undefined);
+		strictEqual(harper.calls[0].options?.cwd, process.cwd());
 	});
 
 	test('passes extra arguments through, and a restart other than rolling', async () => {
