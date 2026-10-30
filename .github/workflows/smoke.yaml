@@ -1,0 +1,65 @@
+name: Smoke
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+permissions: {}
+env:
+  E2E_ROOT: /tmp/harper-e2e
+  E2E_HARPER_VERSION: 5.4.0-alpha.1
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+      deployments: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: test/e2e/start-harper.sh
+      - name: Trust this run as the preview identity
+        run: |
+          operation() {
+            curl --silent --show-error --fail-with-body --user e2e-admin:e2e-Admin-Password1 \
+              --header 'Content-Type: application/json' --data "$1" http://127.0.0.1:9925/
+            echo
+          }
+          operation '{"operation":"drop_oidc_trust","id":"e2e-deploy"}'
+          operation '{"operation":"add_role","role":"shop-ci-preview","permission":{"super_user":false,"operations":["deploy_component","drop_component","get_components","get_deployment","registration_info"],"component_deploy":{"names":["shop-pr-*"],"constraints":{"isolated":true,"hostSuffix":".app.e2e.test","branchedDatabases":"required"}}}}'
+          operation '{"operation":"add_user","username":"shop-ci-preview","role":"shop-ci-preview","active":true,"password":"e2e-Preview-Password1"}'
+          operation "$(jq --null-input \
+            --arg repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" \
+            --arg event_name "$GITHUB_EVENT_NAME" \
+            '{
+              operation: "add_oidc_trust",
+              id: "smoke-preview",
+              issuer: "https://token.actions.githubusercontent.com",
+              audience: "http://127.0.0.1:9925/",
+              user: "shop-ci-preview",
+              claims: { repository_id: $repository_id, workflow_ref: $workflow_ref, event_name: $event_name }
+            }')"
+      - name: Run the action as pull_request_target
+        env:
+          INPUT_TARGET: http://127.0.0.1:9925
+          INPUT_APP: shop
+          INPUT_PREVIEW: 'true'
+          INPUT_DOMAIN: app.e2e.test
+          INPUT_GITHUB_TOKEN: ${{ github.token }}
+          HARPER_DEPLOY_ACTION_CLI: /tmp/harper-e2e/cli/node_modules/.bin/harper
+        run: GITHUB_EVENT_NAME=pull_request_target node src/main.ts
+      - if: always()
+        run: |
+          curl --silent --user e2e-admin:e2e-Admin-Password1 --header 'Content-Type: application/json' \
+            --data '{"operation":"get_components"}' http://127.0.0.1:9925/ \
+            | jq '[.entries[] | {name, host, preview, package, status: .status.status}]'
+      - if: failure()
+        run: tail -n 60 "$E2E_ROOT/harper.log" "$E2E_ROOT/root/log/hdb.log"
