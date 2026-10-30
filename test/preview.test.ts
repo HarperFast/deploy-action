@@ -335,6 +335,33 @@ suite('runPreview', () => {
 			match(fake.comments[0].body, new RegExp(RUN_URL));
 		});
 
+		test('a CLI that cannot run at all still fails the Deployment and the run', async () => {
+			const preview = context();
+			preview.harper = async () => {
+				throw new Error('npm could not install harper');
+			};
+			await rejects(
+				runPreview(preview, 'pull_request_target', pullRequestEvent('opened')),
+				/npm could not install harper/
+			);
+			deepStrictEqual(statesOf(), ['in_progress', 'failure']);
+			match(fake.comments[0].body, /preview failed/);
+		});
+
+		test('a failed deploy whose cleanup also fails leaves no Deployment in progress', async () => {
+			fake.setPullRequest(12, { state: 'open', sha: SHA }, { state: 'closed', sha: SHA });
+			await rejects(
+				runPreview(
+					context(() => ({ exitCode: 1 })),
+					'pull_request_target',
+					pullRequestEvent('opened')
+				),
+				/harper preview deploy exited with 1/
+			);
+			deepStrictEqual(statesOf(), ['in_progress', 'failure']);
+			strictEqual(dropsIn(), 5);
+		});
+
 		test('a GitHub surface that fails does not fail the deploy', async () => {
 			fake.failNext(/POST \/deployments$/, 403);
 			fake.failNext(/GET \/issues\/12\/comments/, 403);
@@ -343,6 +370,13 @@ suite('runPreview', () => {
 			strictEqual(warnings.length, 2);
 			match(warnings[0], /Could not create the GitHub Deployment/);
 			match(warnings[1], /Could not update the PR comment/);
+		});
+
+		test('a Deployment whose first status failed is still the live one', async () => {
+			fake.failNext(/POST \/deployments\/\d+\/statuses/, 500);
+			await runPreview(context(), 'pull_request_target', pullRequestEvent('opened'));
+			match(warnings[0], /Could not update the GitHub Deployment/);
+			deepStrictEqual(statesOf(), ['success']);
 		});
 
 		test('warns when the CLI prints no URL', async () => {

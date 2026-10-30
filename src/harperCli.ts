@@ -25,7 +25,8 @@ export interface HarperRunnerOptions {
 // A configured credential outranks the job's identity token in the CLI, and a blank one disables it.
 const CREDENTIAL_VARIABLE = /^(?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN)$/;
 const DOTENV_CREDENTIAL =
-	/^\s*(?:export\s+)?((?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN))\s*=/m;
+	/^\s*(?:export\s+)?((?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN))\s*[=:]/m;
+/^\s*(?:export\s+)?((?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN))\s*=/m;
 
 function withoutInputs(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	return Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('INPUT_')));
@@ -99,13 +100,13 @@ export function createHarperRunner({ version, target, cliPath, env = process.env
 			throw new Error('This job has no identity token: grant it `permissions: id-token: write`');
 		}
 		if (cwd) await assertNoDotenvCredentials(cwd);
-		installed ??= installHarperCli(version, env);
 		scratch ??= mkdtemp(join(env.RUNNER_TEMP ?? tmpdir(), 'harper-run-')).then(async (root) => {
 			const directories = { home: join(root, 'home'), work: join(root, 'work') };
 			await Promise.all([mkdir(directories.home), mkdir(directories.work)]);
 			return directories;
 		});
 		const { home, work } = await scratch;
+		installed ??= installHarperCli(version, env);
 		return execute(await installed, args, { cwd: cwd ?? work, quiet, env: cliEnvironment(env, target, home) });
 	};
 }

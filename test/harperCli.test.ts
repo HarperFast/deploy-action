@@ -75,6 +75,8 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const payload = scratch();
 		writeFileSync(join(payload, '.env'), 'DATABASE_URL=x\n  export HARPER_CLI_OPERATION_TOKEN = abc\n');
 		await rejects(run(['deploy'], { cwd: payload, quiet: true }), /\.env sets HARPER_CLI_OPERATION_TOKEN/);
+		writeFileSync(join(payload, '.env'), 'CLI_TARGET_PASSWORD: secret\n');
+		await rejects(run(['deploy'], { cwd: payload, quiet: true }), /\.env sets CLI_TARGET_PASSWORD/);
 		writeFileSync(join(payload, '.env'), 'DATABASE_URL=x\n# HARPER_CLI_PASSWORD=old\n');
 		strictEqual((await run(['deploy'], { cwd: payload, quiet: true })).stdout.trim(), 'ran');
 	});
@@ -167,6 +169,28 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 		strictEqual(installs[0].token, undefined);
 		ok(installs[0].args.includes('harper@>=5.4.0-alpha.1 <6'));
 		strictEqual(installs[0].cwd, installs[0].args[installs[0].args.indexOf('--prefix') + 1]);
+	});
+
+	test('a failed install reaches the caller, not the process', async (context) => {
+		context.mock.method(process.stdout, 'write', () => true);
+		const unhandled: unknown[] = [];
+		const listener = (reason: unknown) => unhandled.push(reason);
+		process.on('unhandledRejection', listener);
+		context.after(() => process.off('unhandledRejection', listener));
+		const npm = executable(join(scratch(), 'npm'), 'process.exit(7);');
+		const run = createHarperRunner({
+			version: '5.4.0',
+			target: 'https://x/',
+			env: {
+				...process.env,
+				...identity,
+				PATH: `${dirname(npm)}${delimiter}${process.env.PATH}`,
+				RUNNER_TEMP: scratch(),
+			},
+		});
+		await rejects(run(['deploy']), /npm could not install/);
+		await new Promise((done) => setImmediate(done));
+		deepStrictEqual(unhandled, []);
 	});
 
 	test('fails when npm does', async (context) => {
