@@ -186,6 +186,8 @@ suite('preview lifecycle', () => {
 		);
 
 		await enablePreviews();
+		// It matches the same claims, and an exchange takes the first policy by id.
+		if (HAS_IDENTITY) await operation({ operation: 'drop_oidc_trust', id: 'e2e-deploy' });
 		await trustPolicyAllows(PREVIEW_OPERATIONS);
 	});
 
