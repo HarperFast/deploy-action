@@ -26,16 +26,15 @@ export interface HarperRunnerOptions {
 const CREDENTIAL_VARIABLE = /^(?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN)$/;
 const DOTENV_CREDENTIAL =
 	/^\s*(?:export\s+)?((?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN))\s*[=:]/m;
-/^\s*(?:export\s+)?((?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN))\s*=/m;
 
-function withoutInputs(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-	return Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('INPUT_')));
+function without(env: NodeJS.ProcessEnv, variable: RegExp): NodeJS.ProcessEnv {
+	return Object.fromEntries(Object.entries(env).filter(([name]) => !variable.test(name)));
 }
 
 /** `home` replaces HOME, where the CLI keeps `harper login` credentials, which also outrank the identity token. */
 export function cliEnvironment(env: NodeJS.ProcessEnv, target: string, home: string): NodeJS.ProcessEnv {
-	const filtered = Object.entries(withoutInputs(env)).filter(([name]) => !CREDENTIAL_VARIABLE.test(name));
-	return { ...Object.fromEntries(filtered), HARPER_CLI_TARGET: target, HOME: home, USERPROFILE: home };
+	const filtered = without(without(env, /^INPUT_/), CREDENTIAL_VARIABLE);
+	return { ...filtered, HARPER_CLI_TARGET: target, HOME: home, USERPROFILE: home };
 }
 
 /** The CLI loads `.env` from where it runs, for any variable not already set. */
@@ -85,7 +84,7 @@ export async function installHarperCli(version: string, env: NodeJS.ProcessEnv):
 			'--no-package-lock',
 			`harper@${version}`,
 		],
-		{ cwd: directory, env: withoutInputs(env) }
+		{ cwd: directory, env: without(env, /^(?:INPUT_|ACTIONS_ID_TOKEN_)/) }
 	);
 	if (exitCode !== 0) throw new Error(`npm could not install harper@${version}: it exited with ${exitCode}`);
 	return join(directory, 'node_modules', '.bin', 'harper');

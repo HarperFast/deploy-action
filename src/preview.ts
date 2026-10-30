@@ -236,6 +236,7 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 	if (await closedMeanwhile(context, number)) {
 		const { outcome } = await dropClosedPreview(context, number).catch(async (error) => {
 			await finishDeployment(context, deployment, 'failure');
+			if (deployFailure) log.warning(error.message);
 			throw deployFailure ?? error;
 		});
 		if (outcome === 'dropped') {

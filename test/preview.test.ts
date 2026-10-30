@@ -360,6 +360,7 @@ suite('runPreview', () => {
 			);
 			deepStrictEqual(statesOf(), ['in_progress', 'failure']);
 			strictEqual(dropsIn(), 5);
+			match(warnings.at(-1) ?? '', /not dropped after 5 attempts/);
 		});
 
 		test('a GitHub surface that fails does not fail the deploy', async () => {

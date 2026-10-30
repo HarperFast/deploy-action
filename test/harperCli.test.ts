@@ -143,7 +143,7 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const home = scratch();
 		const npm = executable(
 			join(home, 'bin', 'npm'),
-			`require('node:fs').appendFileSync(process.env.NPM_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), token: process.env.INPUT_GITHUB_TOKEN }) + '\\n');
+			`require('node:fs').appendFileSync(process.env.NPM_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), secrets: [process.env.INPUT_GITHUB_TOKEN, process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN] }) + '\\n');
 const prefix = process.argv[process.argv.indexOf('--prefix') + 1];
 require('node:fs').mkdirSync(prefix + '/node_modules/.bin', { recursive: true });
 require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/bin/env node\\n', { mode: 0o755 });`
@@ -166,7 +166,7 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 			.map((line) => JSON.parse(line));
 		strictEqual(installs.length, 1);
 		ok(installs[0].args.includes('--ignore-scripts'));
-		strictEqual(installs[0].token, undefined);
+		deepStrictEqual(installs[0].secrets, [null, null]);
 		ok(installs[0].args.includes('harper@>=5.4.0-alpha.1 <6'));
 		strictEqual(installs[0].cwd, installs[0].args[installs[0].args.indexOf('--prefix') + 1]);
 	});
