@@ -1,6 +1,6 @@
 # Runs from main on real pull_request_target events, to test what is merged: the token's claims, the environments, and
-# the policies enable_previews writes. Harper runs on this runner beside the identity, so it deploys the fixture from
-# main, never the PR's code. The comment's URL does not resolve.
+# trust policies with the claims enable_previews pins. Harper runs on this runner beside the identity, so it deploys the
+# fixture from main, never the PR's code. The comment's URL does not resolve.
 name: Preview self-test
 on:
   pull_request_target:
@@ -97,6 +97,8 @@ jobs:
           harper_version: ${{ env.E2E_HARPER_VERSION }}
       - name: The preview is gone
         if: steps.preview.outputs.outcome == 'dropped'
-        run: test -z "$(test/e2e/component.sh "$E2E_APP-pr-$PR")"
+        run: >-
+          test/e2e/operation.sh '{"operation":"get_components"}' |
+          jq --exit-status --arg name "$E2E_APP-pr-$PR" 'all(.entries[]; .name != $name)'
       - if: failure()
         run: tail -n 100 "$E2E_ROOT/harper.log" "$E2E_ROOT/root/log/hdb.log"
