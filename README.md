@@ -247,7 +247,7 @@ Start from `permissions: {}` at the top of the workflow, as the examples do. A n
 - **Forks never get the identity.** The `if:` on each job is the gate: no token claim names the head repository. The action also skips a fork itself.
 - **The PR's code still runs on the cluster**, with the preview role's rights. That role can deploy and drop only that application's `<app>-pr-<n>` previews. Without `branched_databases: false`, a preview's writes stay in its own database branch, except in the `system` database (users and roles), which cannot be branched.
 - **A preview is the same site as what production serves from the cluster's host name.** Use `__Host-` cookie names and CSRF or `Origin` checks there.
-- **OIDC only.** The CLI would prefer any other credential to the identity token. So the action strips `HARPER_CLI_*` and `CLI_TARGET_*` credentials from its environment and refuses them in `target` and `args`. It gives the CLI an empty home directory, where no `harper login` is saved, and refuses a deployed directory whose `.env` sets one. Preview runs start the CLI in an empty directory.
+- **OIDC only.** The CLI would prefer any other credential to the identity token. So the action strips `HARPER_CLI_*` and `CLI_TARGET_*` credentials from its environment and refuses them in `target` and `args`. It gives the CLI an empty home directory, where no `harper login` is saved, and refuses a deployed directory whose `.env` sets one. Previews by reference start the CLI in an empty directory.
 - **The CLI is installed fresh, into an empty directory, with install scripts off**, so a project's `.npmrc` has no say in it.
 
 ## Limitations
