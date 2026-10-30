@@ -1,0 +1,97 @@
+name: Harper Deploy
+description: Deploy a Harper application with GitHub's OIDC identity, or run its per-PR previews
+author: HarperFast
+branding:
+  icon: upload-cloud
+  color: green
+
+inputs:
+  target:
+    description: The cluster's operations API URL, such as https://cluster.example.com:9925/
+    required: true
+  app:
+    description: The application's component name
+    required: true
+  preview:
+    description: Run the PR preview lifecycle instead of a normal deploy
+    default: 'false'
+  path:
+    description: The directory to deploy as a payload, when not deploying by reference
+    default: '.'
+  by_ref:
+    description: Have the cluster fetch the commit instead of uploading a payload. Defaults to true for previews and when ref is set
+  ref:
+    description: The commit, branch or tag to deploy by reference. Previews always deploy the PR's head commit
+  restart:
+    description: How a normal deploy restarts Harper, as the CLI's restart= argument
+    default: rolling
+  credential:
+    description: Use the sealed git credential to fetch a private repository
+    default: 'false'
+  domain:
+    description: The preview domain. Defaults to app.<target host>
+  label:
+    description: A DNS label added to the preview host, to tell apart previews of several applications
+  ttl:
+    description: Days until the cluster expires the preview. Defaults to the CLI's, capped by the application's maxTtlDays
+  branched_databases:
+    description: Give each preview its own database branch. false shares the cluster's data
+    default: 'true'
+  comment:
+    description: Keep one PR comment with the preview URL
+    default: 'true'
+  github_deployment:
+    description: Record each preview as a GitHub Deployment
+    default: 'true'
+  deployment_environment:
+    description: The GitHub environment name for those Deployments. Defaults to <app>-preview
+  args:
+    description: More CLI arguments for the deploy, one key=value per line
+  harper_version:
+    description: The npm version or range of the harper CLI
+    default: '>=5.4.0-alpha.1 <6'
+  node_version:
+    description: The Node.js version to run the CLI on. Empty uses the one already on the runner
+    default: '24'
+  github_token:
+    description: The token for PR comments and Deployments
+    default: ${{ github.token }}
+
+outputs:
+  outcome:
+    description: What the run did, one of deployed, dropped, kept, swept or skipped
+    value: ${{ steps.run.outputs.outcome }}
+  url:
+    description: The preview URL
+    value: ${{ steps.run.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      if: inputs.node_version != ''
+      with:
+        node-version: ${{ inputs.node_version }}
+        package-manager-cache: false
+    - id: run
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/main.ts"
+      env:
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_APP: ${{ inputs.app }}
+        INPUT_PREVIEW: ${{ inputs.preview }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_BY_REF: ${{ inputs.by_ref }}
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_RESTART: ${{ inputs.restart }}
+        INPUT_CREDENTIAL: ${{ inputs.credential }}
+        INPUT_DOMAIN: ${{ inputs.domain }}
+        INPUT_LABEL: ${{ inputs.label }}
+        INPUT_TTL: ${{ inputs.ttl }}
+        INPUT_BRANCHED_DATABASES: ${{ inputs.branched_databases }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_GITHUB_DEPLOYMENT: ${{ inputs.github_deployment }}
+        INPUT_DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_HARPER_VERSION: ${{ inputs.harper_version }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}

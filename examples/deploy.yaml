@@ -1,0 +1,17 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+permissions: {}
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+    steps:
+      - uses: HarperFast/deploy-action@v1
+        with:
+          target: ${{ vars.HARPER_CLI_TARGET }}
+          app: shop
+          by_ref: true

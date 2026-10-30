@@ -1,0 +1,20 @@
+name: Preview sweep
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    environment: preview-cleanup
+    permissions:
+      id-token: write
+      pull-requests: write
+      deployments: write
+    steps:
+      - uses: HarperFast/deploy-action@v1
+        with:
+          target: ${{ vars.HARPER_PREVIEW_TARGET }}
+          app: shop
+          preview: true
