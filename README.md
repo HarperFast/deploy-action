@@ -192,11 +192,29 @@ With a package the commit is still recorded on the preview. For a directory, als
 
 GitHub's [workflow execution protections](https://docs.github.com/en/actions/concepts/about-actions-policies) add a default policy that blocks `pull_request_target` in public repositories that have no applicable event policy. It does not apply to private or internal repositories. GitHub first announced enforcement for November 2, 2026, and [moved it to December 2, 2026](https://github.blog/changelog/2026-09-17-workflow-execution-protections-in-github-actions-generally-available/). Once enforced, a blocked run fails with an error.
 
-To keep previews working in a public repository, allow the event for this workflow:
+To keep previews working in a public repository, allow the event for the preview workflow. The policy lives on each repository, and needs a repository admin. An organization owner can write one that covers several repositories instead.
 
-1. Go to the repository's **Settings > Actions > Policies**, or the organization's, and create a policy.
-2. Set its enforcement to active, and target `.github/workflows/preview.yaml`.
-3. Add a **Restrict events** rule that allows `pull_request_target`.
+### From the command line
+
+[`examples/preview-actions-policy.json`](examples/preview-actions-policy.json) is that policy. Create it with the `gh` CLI, replacing `OWNER/REPO`:
+
+```bash
+curl --fail --silent --show-error --location https://raw.githubusercontent.com/HarperFast/deploy-action/main/examples/preview-actions-policy.json | gh api --method POST repos/OWNER/REPO/actions/policies --header 'X-GitHub-Api-Version: 2026-03-10' --input -
+```
+
+If your preview workflow has another name, edit the `include` path in a copy of the file first, and pass that file to `--input`.
+
+### In the browser
+
+1. Go to the repository's **Settings > Actions > Policies**, and create a new policy.
+2. Name it, and set **Enforcement status** to **Active**. A new policy can start out disabled, which allows nothing.
+3. Under **Target workflows**, use **Add target** to add the path `.github/workflows/preview.yaml`.
+4. Turn on **Restrict events**, and add `pull_request_target` to **Allowed events**.
+5. Click **Create**.
+
+### What the policy does
+
+The policy's event list applies to that workflow alone, and it becomes the only list of events that can start it. So if your preview workflow has other triggers, add them too. Other workflows are not affected.
 
 **Policy insights**, under the same menu, shows which runs were or would have been blocked. An enterprise or organization policy can still block the event; see [Control workflow execution](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution).
 
