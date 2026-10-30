@@ -1,0 +1,25 @@
+{
+	"name": "@harperfast/deploy-action",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Deploy Harper applications and per-PR previews from GitHub Actions",
+	"license": "Apache-2.0",
+	"type": "module",
+	"engines": {
+		"node": "^22.18.0 || >=24.0.0"
+	},
+	"scripts": {
+		"test": "node --test 'test/*.test.ts'",
+		"test:e2e": "test/e2e/run-local.sh",
+		"typecheck": "tsc",
+		"format:check": "prettier --check .",
+		"format:write": "prettier --write ."
+	},
+	"prettier": "@harperfast/code-guidelines/prettier",
+	"devDependencies": {
+		"@harperfast/code-guidelines": "^0.1.2",
+		"@types/node": "^24.19.2",
+		"prettier": "~3.9.0",
+		"typescript": "^5.9.3"
+	}
+}

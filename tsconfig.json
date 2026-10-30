@@ -1,0 +1,12 @@
+{
+	"extends": "@harperfast/code-guidelines/tsconfig.node.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
+		"strict": true,
+		"skipLibCheck": true
+	},
+	"include": ["src", "test"]
+}

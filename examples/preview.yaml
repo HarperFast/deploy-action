@@ -1,0 +1,37 @@
+name: Preview
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+    branches: [main]
+permissions: {}
+jobs:
+  deploy:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      id-token: write
+      pull-requests: write
+      deployments: write
+    concurrency:
+      group: harper-preview-${{ github.event.pull_request.number }}
+    steps:
+      - uses: HarperFast/deploy-action@v1
+        with:
+          target: ${{ vars.HARPER_PREVIEW_TARGET }}
+          app: shop
+          preview: true
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: preview-cleanup
+    permissions:
+      id-token: write
+      pull-requests: write
+      deployments: write
+    steps:
+      - uses: HarperFast/deploy-action@v1
+        with:
+          target: ${{ vars.HARPER_PREVIEW_TARGET }}
+          app: shop
+          preview: true

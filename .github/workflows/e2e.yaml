@@ -1,0 +1,37 @@
+name: E2E
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions: {}
+env:
+  E2E_ROOT: /tmp/harper-e2e
+  E2E_HARPER_VERSION: 5.4.0-alpha.1
+jobs:
+  e2e:
+    # A fork's pull_request run has no identity token to authenticate with.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: test/e2e/start-harper.sh
+      - name: Deploy a payload through action.yml
+        uses: ./
+        with:
+          target: http://127.0.0.1:9925
+          app: e2e-deploy
+          path: test/e2e/app
+          harper_version: ${{ env.E2E_HARPER_VERSION }}
+      - run: node --test test/e2e/lifecycle.test.ts
+      - if: failure()
+        run: tail -n 100 "$E2E_ROOT/harper.log" "$E2E_ROOT/root/log/hdb.log"
