@@ -1,10 +1,7 @@
 /**
- * The whole preview lifecycle through the action's entry point, against a real Harper. On a runner it authenticates
- * with the job's real identity token, through real trust policies for each stage. GitHub's REST API is a local fake,
- * so a PR can be closed mid-run, and git reads the "repository" from a local bare one, through `url.insteadOf`.
- *
- * Previews have no HTTP assertion: Harper's own ports refuse a preview's host by design (host-manager reaches its
- * worker), so the test asks Harper what it runs instead.
+ * GitHub's REST API is a local fake so that a PR can close mid-run, and git reads the "repository" from a local bare
+ * one through `url.insteadOf`. Previews have no HTTP assertion: Harper's own ports refuse a preview's host by design
+ * (host-manager reaches its worker), so the tests ask Harper what it runs instead.
  */
 import { deepStrictEqual, match, ok, strictEqual } from 'node:assert';
 import { execFile, execFileSync } from 'node:child_process';

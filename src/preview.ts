@@ -88,18 +88,21 @@ async function postComment(
 async function startDeployment(context: PreviewContext, pullRequest: PullRequestEvent): Promise<number | undefined> {
 	const { github, inputs, runUrl } = context;
 	if (!inputs.githubDeployment) return undefined;
-	const deployment = await bestEffort(context, 'create the GitHub Deployment', async () => {
-		const description = `Preview of ${inputs.app} for PR #${pullRequest.number}`;
-		const created = await github.createDeployment({
+	const description = `Preview of ${inputs.app} for PR #${pullRequest.number}`;
+	const deployment = await bestEffort(context, 'create the GitHub Deployment', () =>
+		github.createDeployment({
 			ref: pullRequest.sha,
 			task: deploymentTask(inputs.app, pullRequest.number),
 			environment: inputs.deploymentEnvironment,
 			description,
 			payload: { app: inputs.app, pr: pullRequest.number },
-		});
-		await github.setDeploymentStatus(created.id, { state: 'in_progress', description, log_url: runUrl });
-		return created;
-	});
+		})
+	);
+	if (deployment) {
+		await bestEffort(context, 'update the GitHub Deployment', () =>
+			github.setDeploymentStatus(deployment.id, { state: 'in_progress', description, log_url: runUrl })
+		);
+	}
 	return deployment?.id;
 }
 
@@ -217,14 +220,24 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 	}
 
 	const deployment = await startDeployment(context, pullRequest);
-	const { exitCode, stdout } = await harper(previewDeployArguments(context, pullRequest), {
-		cwd: inputs.byRef ? undefined : resolve(inputs.path),
-	});
-	const deployFailure = exitCode === 0 ? undefined : new Error(`harper preview deploy exited with ${exitCode}`);
+	let stdout = '';
+	let deployFailure: Error | undefined;
+	try {
+		const result = await harper(previewDeployArguments(context, pullRequest), {
+			cwd: inputs.byRef ? undefined : resolve(inputs.path),
+		});
+		stdout = result.stdout;
+		if (result.exitCode !== 0) deployFailure = new Error(`harper preview deploy exited with ${result.exitCode}`);
+	} catch (error) {
+		deployFailure = error as Error;
+	}
 
 	// Closed while this deployed: the close event's cleanup may have run first, and found nothing to drop.
 	if (await closedMeanwhile(context, number)) {
-		const { outcome } = await dropClosedPreview(context, number);
+		const { outcome } = await dropClosedPreview(context, number).catch(async (error) => {
+			await finishDeployment(context, deployment, 'failure');
+			throw deployFailure ?? error;
+		});
 		if (outcome === 'dropped') {
 			if (deployFailure) throw deployFailure;
 			return { outcome };

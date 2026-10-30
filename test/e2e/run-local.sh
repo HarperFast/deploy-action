@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# The e2e run without a GitHub runner: real Harper and password authentication instead of OIDC.
 set -euo pipefail
 
 repository="$(cd "$(dirname "$0")/../.." && pwd)"

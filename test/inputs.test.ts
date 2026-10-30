@@ -61,14 +61,36 @@ suite('readInputs', () => {
 	});
 
 	test('args cannot bring in a credential or another target', () => {
-		for (const argument of ['auth_password=x', 'auth_username=x', 'username=x', 'password=x', 'target=https://x/']) {
+		for (const argument of [
+			'auth_password=x',
+			'auth_username=x',
+			'username=x',
+			'password=x',
+			'operation_token=x',
+			'refresh_token=x',
+			'target=https://x/',
+		]) {
 			throws(() => readInputs({ ...required, INPUT_ARGS: argument }), /OIDC only/);
 		}
-		throws(() => readInputs({ ...required, INPUT_ARGS: 'deploy' }), /one key=value per line/);
+		for (const argument of ['deploy', '--ref=main', 'ref =main', '=x']) {
+			throws(() => readInputs({ ...required, INPUT_ARGS: argument }), /one key=value per line/);
+		}
 	});
 
 	test('args cannot override what the action sets, such as the commit or the preview', () => {
-		for (const key of ['project', 'app', 'pr', 'branch', 'by_ref', 'ref', 'sha', 'restart', 'domain', 'ttl']) {
+		for (const key of [
+			'project',
+			'app',
+			'pr',
+			'branch',
+			'by_ref',
+			'ref',
+			'sha',
+			'restart',
+			'domain',
+			'ttl',
+			'repository',
+		]) {
 			throws(
 				() => readInputs({ ...required, INPUT_ARGS: `${key}=x` }),
 				new RegExp(`cannot set ${key}: the action sets it`)
