@@ -8,7 +8,9 @@
  */
 import { deepStrictEqual, match, ok, strictEqual } from 'node:assert';
 import { execFile, execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { after, before, suite, test } from 'node:test';
 import { promisify } from 'node:util';
@@ -135,7 +137,6 @@ suite('preview lifecycle', () => {
 		};
 	}
 
-	/** Runs the action as `action.yml` does, with the event replaced. */
 	async function runAction(eventName: string, payload: unknown): Promise<Record<string, string>> {
 		const eventPath = join(work, 'event.json');
 		const outputPath = join(work, 'output');
@@ -191,7 +192,10 @@ suite('preview lifecycle', () => {
 		await trustPolicyAllows(PREVIEW_OPERATIONS);
 	});
 
-	after(() => fake.stop());
+	after(async () => {
+		await fake.stop();
+		rmSync(work, { recursive: true, force: true });
+	});
 
 	test('opened: deploys the commit by reference and reports it on the PR', async () => {
 		fake.setPullRequest(7, { state: 'open', sha: firstCommit });
@@ -270,6 +274,48 @@ suite('preview lifecycle', () => {
 		strictEqual((await runAction('schedule', {})).outcome, 'swept');
 		strictEqual(await component('shop-pr-10'), undefined);
 		ok(await component('shop-pr-11'));
+	});
+
+	test('a saved admin login does not outrank the identity token', async () => {
+		const { operation_token } = await operation({
+			operation: 'create_authentication_tokens',
+			username: 'e2e-admin',
+			password: 'e2e-Admin-Password1',
+		});
+		const home = join(work, 'home');
+		mkdirSync(join(home, '.harperdb'), { recursive: true });
+		writeFileSync(
+			join(home, '.harperdb', 'credentials.json'),
+			JSON.stringify({ targets: { [`${TARGET}/`]: { operation_token } }, last_target: `${TARGET}/` })
+		);
+		const identity = createServer((_request, response) => {
+			response.writeHead(500);
+			response.end();
+		});
+		await new Promise<void>((done) => identity.listen(0, '127.0.0.1', done));
+		const outputPath = join(work, 'output');
+		try {
+			await promisify(execFile)(process.execPath, [MAIN], {
+				env: {
+					...process.env,
+					HOME: home,
+					GITHUB_OUTPUT: outputPath,
+					INPUT_TARGET: TARGET,
+					INPUT_APP: 'e2e-saved-login',
+					INPUT_PATH: resolve(import.meta.dirname, 'app'),
+					INPUT_RESTART: 'true',
+					HARPER_DEPLOY_ACTION_CLI: join(ROOT, 'cli/node_modules/.bin/harper'),
+					ACTIONS_ID_TOKEN_REQUEST_URL: `http://127.0.0.1:${(identity.address() as AddressInfo).port}/`,
+					ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'unused',
+				},
+			});
+			ok(false, 'the deploy authenticated without the identity token');
+		} catch (error: any) {
+			match(error.stderr, /Could not obtain a GitHub Actions identity token/);
+		} finally {
+			identity.close();
+		}
+		strictEqual(await component('e2e-saved-login'), undefined);
 	});
 
 	test('the normal deploy through action.yml, on the runner, took effect', { skip: !HAS_IDENTITY }, async () => {

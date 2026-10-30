@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Starts Harper on this machine, with the identity the normal deploy authenticates as.
 set -euo pipefail
 
 : "${E2E_ROOT:?the directory for Harper, short enough for Unix sockets}"

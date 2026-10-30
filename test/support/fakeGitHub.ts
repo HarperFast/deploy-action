@@ -10,7 +10,7 @@ export interface FakeComment {
 	id: number;
 	issue: number;
 	body: string;
-	user: { login: string };
+	user: { login: string; type: string };
 	author_association: string;
 }
 
@@ -31,7 +31,6 @@ async function readJson(request: IncomingMessage): Promise<any> {
 	return chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : undefined;
 }
 
-/** GitHub's REST API, as far as the action uses it, over real HTTP. */
 export class FakeGitHub {
 	url = '';
 	pageSize = 100;
@@ -72,7 +71,7 @@ export class FakeGitHub {
 			id: this.#nextId++,
 			issue,
 			body,
-			user: { login },
+			user: { login, type: login.endsWith('[bot]') ? 'Bot' : 'User' },
 			author_association: association,
 		};
 		this.comments.push(comment);

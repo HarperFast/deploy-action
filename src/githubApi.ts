@@ -21,7 +21,7 @@ export interface IssueComment {
 	id: number;
 	body?: string;
 	author_association?: string;
-	user?: { login?: string };
+	user?: { login?: string; type?: string };
 }
 
 export interface Deployment {
