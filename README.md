@@ -196,15 +196,19 @@ To keep previews working in a public repository, allow the event for the preview
 
 ### From the command line
 
-[`examples/preview-actions-policy.json`](examples/preview-actions-policy.json) is that policy. Create it with the `gh` CLI, replacing `OWNER/REPO`:
+[`examples/preview-actions-policy.json`](examples/preview-actions-policy.json) is that policy. Create it with `jq` and the `gh` CLI, replacing `OWNER/REPO`:
 
 ```bash
-curl --fail --silent --show-error --location https://raw.githubusercontent.com/HarperFast/deploy-action/main/examples/preview-actions-policy.json | gh api --method POST repos/OWNER/REPO/actions/policies --header 'X-GitHub-Api-Version: 2026-03-10' --input -
+curl --fail --silent --show-error --location https://raw.githubusercontent.com/HarperFast/deploy-action/main/examples/preview-actions-policy.json | jq '{name, enforcement, conditions, rules}' | gh api --method POST repos/OWNER/REPO/actions/policies --header 'X-GitHub-Api-Version: 2026-03-10' --input -
 ```
 
 If your preview workflow has another name, edit the `include` path in a copy of the file first, and pass that file to `--input`.
 
-### In the browser
+### Importing the file in the browser
+
+Download that file, then import it from the repository's **Settings > Actions > Policies** page. Check the form against the steps below, and click **Create**.
+
+### Filling in the form
 
 1. Go to the repository's **Settings > Actions > Policies**, and create a new policy.
 2. Name it, and set **Enforcement status** to **Active**. A new policy can start out disabled, which allows nothing.

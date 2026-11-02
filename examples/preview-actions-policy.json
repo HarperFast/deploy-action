@@ -1,5 +1,6 @@
 {
 	"name": "Allow Harper previews",
+	"target": "actions",
 	"enforcement": "active",
 	"conditions": {
 		"workflow_path": {
@@ -14,5 +15,6 @@
 				"allowed_events": ["pull_request_target"]
 			}
 		}
-	]
+	],
+	"bypass_actors": []
 }

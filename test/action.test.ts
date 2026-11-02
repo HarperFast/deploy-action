@@ -106,7 +106,9 @@ suite('example workflows', () => {
 
 	test('the Actions policy allows exactly what the preview workflow needs', () => {
 		const policy = JSON.parse(read('examples/preview-actions-policy.json'));
-		deepStrictEqual(Object.keys(policy).sort(), ['conditions', 'enforcement', 'name', 'rules']);
+		deepStrictEqual(Object.keys(policy), ['name', 'target', 'enforcement', 'conditions', 'rules', 'bypass_actors']);
+		strictEqual(policy.target, 'actions');
+		deepStrictEqual(policy.bypass_actors, []);
 		strictEqual(policy.enforcement, 'active');
 		deepStrictEqual(policy.conditions.workflow_path, {
 			include: ['.github/workflows/preview.yaml'],
@@ -115,7 +117,11 @@ suite('example workflows', () => {
 		deepStrictEqual(policy.rules, [
 			{ type: 'restrict_action_events', parameters: { allowed_events: ['pull_request_target'] } },
 		]);
-		ok(readme.includes('main/examples/preview-actions-policy.json'));
+		ok(
+			readme.includes(
+				"main/examples/preview-actions-policy.json | jq '{name, enforcement, conditions, rules}' | gh api"
+			)
+		);
 	});
 
 	test('the production workflow matches what `harper deploy setup=true` pins', () => {
