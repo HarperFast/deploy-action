@@ -202,7 +202,7 @@ To keep previews working in a public repository, allow the event for the preview
 curl --fail --silent --show-error --location https://raw.githubusercontent.com/HarperFast/deploy-action/main/examples/preview-actions-policy.json | jq '{name, enforcement, conditions, rules}' | gh api --method POST repos/OWNER/REPO/actions/policies --header 'X-GitHub-Api-Version: 2026-03-10' --input -
 ```
 
-If your preview workflow has another name, edit the `include` path in a copy of the file first, and pass that file to `--input`.
+If your preview workflow has another name, change the `include` path in a copy of the file, and run the same `jq` and `gh api` on that copy.
 
 ### Importing the file in the browser
 
