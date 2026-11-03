@@ -46,6 +46,25 @@ suite('readInputs', () => {
 		throws(() => readInputs({ ...required, INPUT_TARGET: 'https://me:pw@cluster.example.com/' }), /OIDC only/);
 	});
 
+	test('refuses plaintext http to anything but a loopback address', () => {
+		throws(() => readInputs({ ...required, INPUT_TARGET: 'http://cluster.example.com:9925/' }), /must use https/);
+		throws(() => readInputs({ ...required, INPUT_TARGET: 'http://10.0.0.5:9925/' }), /must use https/);
+		for (const target of ['http://127.0.0.1:9925', 'http://localhost:9925/', 'http://[::1]:9925/']) {
+			strictEqual(readInputs({ ...required, INPUT_TARGET: target }).target, target);
+		}
+	});
+
+	test('timeout_minutes defaults to 30 and must be positive', () => {
+		strictEqual(readInputs(required).timeoutMinutes, 30);
+		strictEqual(readInputs({ ...required, INPUT_TIMEOUT_MINUTES: '2.5' }).timeoutMinutes, 2.5);
+		for (const value of ['0', '-1', 'soon']) {
+			throws(
+				() => readInputs({ ...required, INPUT_TIMEOUT_MINUTES: value }),
+				/timeout_minutes must be a positive number/
+			);
+		}
+	});
+
 	test('refuses an app name the cluster would', () => {
 		throws(() => readInputs({ ...required, INPUT_APP: 'shop/one' }), /component name/);
 		throws(() => readInputs({ ...required, INPUT_APP: '' }), /component name/);

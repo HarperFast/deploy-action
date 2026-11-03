@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import type { ActionResult } from './deploy.ts';
-import { GitHubApiError, type GitHubApi, type IssueComment } from './githubApi.ts';
+import { GitHubApiError, type GitHubApi, type IssueComment, type PullRequest } from './githubApi.ts';
 import type { RunHarper } from './harperCli.ts';
 import type { Inputs } from './inputs.ts';
 import type { WorkflowLog } from './workflowCommands.ts';
@@ -13,6 +13,8 @@ const TRUSTED_COMMENTERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 export interface PreviewContext {
 	inputs: Inputs;
 	harper: RunHarper;
+	/** Installs the CLI, so that a drop can follow the PR read that allows it without delay. */
+	prepareHarper: () => Promise<void>;
 	github: GitHubApi;
 	log: WorkflowLog;
 	repository: string;
@@ -156,6 +158,7 @@ function dropArguments(app: string, pullRequest: number): string[] {
 /** A deploy still holding the preview answers 409 until it finishes, so a failed drop is retried; a reopened PR keeps its preview. */
 async function dropClosedPreview(context: PreviewContext, pullRequest: number): Promise<ActionResult> {
 	const { github, harper, inputs, log, sleep } = context;
+	await context.prepareHarper();
 	let lastFailure = '';
 	for (let attempt = 1; attempt <= CLEANUP_ATTEMPTS; attempt++) {
 		if (attempt > 1) await sleep(CLEANUP_RETRY_MS);
@@ -173,6 +176,11 @@ async function dropClosedPreview(context: PreviewContext, pullRequest: number): 
 		}
 		const { exitCode } = await harper(dropArguments(inputs.app, pullRequest));
 		if (exitCode === 0) {
+			if ((await readPullRequest(context, pullRequest))?.state === 'open') {
+				log.warning(
+					`PR #${pullRequest} was reopened while its preview was dropped. If its preview is missing, push a commit or rerun its deploy.`
+				);
+			}
 			await reportRemoved(context, pullRequest);
 			return { outcome: 'dropped' };
 		}
@@ -200,13 +208,13 @@ function previewDeployArguments({ inputs }: PreviewContext, pullRequest: PullReq
 	];
 }
 
-async function closedMeanwhile(context: PreviewContext, pullRequest: number): Promise<boolean> {
+/** Undefined when GitHub cannot say; its close event, or the cluster's expiry, still removes the preview. */
+async function readPullRequest(context: PreviewContext, pullRequest: number): Promise<PullRequest | undefined> {
 	try {
-		return (await context.github.pullRequest(pullRequest)).state === 'closed';
+		return await context.github.pullRequest(pullRequest);
 	} catch (error) {
-		// Its close event, or the cluster's expiry, still removes the preview.
-		context.log.warning(`Could not check PR #${pullRequest} after deploying: ${(error as Error).message}`);
-		return false;
+		context.log.warning(`Could not check PR #${pullRequest}: ${(error as Error).message}`);
+		return undefined;
 	}
 }
 
@@ -233,7 +241,8 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 	}
 
 	// Closed while this deployed: the close event's cleanup may have run first, and found nothing to drop.
-	if (await closedMeanwhile(context, number)) {
+	const after = await readPullRequest(context, number);
+	if (after?.state === 'closed') {
 		const { outcome } = await dropClosedPreview(context, number).catch(async (error) => {
 			await finishDeployment(context, deployment, 'failure');
 			if (deployFailure) log.warning(error.message);
@@ -243,6 +252,13 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 			if (deployFailure) throw deployFailure;
 			return { outcome };
 		}
+	}
+	// A newer commit's run reports for this PR now: reporting here could replace its comment and retire its Deployment.
+	if (after && after.head.sha !== sha) {
+		await finishDeployment(context, deployment, deployFailure ? 'failure' : 'inactive');
+		log.notice(`Not reporting ${short(sha)}: PR #${number} has moved on to ${short(after.head.sha)}.`);
+		if (deployFailure) throw deployFailure;
+		return { outcome: 'skipped' };
 	}
 	if (deployFailure) {
 		await finishDeployment(context, deployment, 'failure');
@@ -260,7 +276,7 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 		`Commit \`${short(sha)}\`, [workflow run](${runUrl}). It updates on each push and is removed when this PR closes.`;
 	await postComment(context, number, message, { create: true });
 	// A cleanup that ran while this reported could have finished first, leaving the report above as the last word.
-	if (await closedMeanwhile(context, number)) {
+	if ((await readPullRequest(context, number))?.state === 'closed') {
 		const { outcome } = await dropClosedPreview(context, number);
 		if (outcome === 'dropped') return { outcome };
 	}

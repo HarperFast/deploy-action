@@ -126,7 +126,7 @@ The PR comment and the Deployment are best effort: if either fails, the run warn
 
 ### Why two jobs
 
-Required reviewers on the `preview` environment gate every deploy, which you want when previews share a cluster with production. They must not gate cleanup, or a closed PR's preview waits for an approval. So cleanup runs in `preview-cleanup`, which should have no required reviewers, under a policy that can only drop. It also stays out of the deploy's concurrency group, where a deploy waiting for approval would hold it up. A deploy that is still running when the PR closes drops its own preview when it finishes.
+Required reviewers on the `preview` environment gate every deploy, which you want when previews share a cluster with production. They must not gate cleanup, or a closed PR's preview waits for an approval. So cleanup runs in `preview-cleanup`, which should have no required reviewers, under a policy that can only drop. It also stays out of the deploy's concurrency group, where a deploy waiting for approval would hold it up. Keep that group on the deploy job: two deploys of one PR must not overlap, or the older one can leave its commit on the cluster. A deploy that is still running when the PR closes drops its own preview when it finishes.
 
 In **Settings > Environments**, allow your default branch under **Deployment branches and tags** on both environments.
 
@@ -226,7 +226,7 @@ The policy's event list applies to that workflow alone, and it becomes the only 
 
 | Input                    | Default              | Description                                                                                                             |
 | ------------------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `target`                 | required             | The cluster's operations API URL. The trust policy's audience has to match it.                                          |
+| `target`                 | required             | The cluster's operations API URL. The trust policy's audience has to match it. Only a loopback address may use `http`.  |
 | `app`                    | required             | The application's component name.                                                                                       |
 | `preview`                | `false`              | Run the preview lifecycle instead of a normal deploy.                                                                   |
 | `path`                   | `.`                  | The directory to deploy as a payload, when not deploying by reference.                                                  |
@@ -243,6 +243,7 @@ The policy's event list applies to that workflow alone, and it becomes the only 
 | `deployment_environment` | `<app>-preview`      | The GitHub environment for those Deployments.                                                                           |
 | `args`                   |                      | More CLI arguments for the deploy, one `key=value` per line.                                                            |
 | `harper_version`         | `>=5.4.0-alpha.1 <6` | The npm version or range of the `harper` CLI.                                                                           |
+| `timeout_minutes`        | `30`                 | The longest each CLI command may run before the action stops it and fails.                                              |
 | `node_version`           | `24`                 | The Node.js version for the CLI, left on `PATH` for later steps. Empty uses the runner's, which must be 22.18 or later. |
 | `github_token`           | `github.token`       | The token for PR comments and Deployments.                                                                              |
 
