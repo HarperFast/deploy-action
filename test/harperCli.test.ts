@@ -1,5 +1,14 @@
 import { deepStrictEqual, match, ok, rejects, strictEqual } from 'node:assert';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { suite, test } from 'node:test';
@@ -55,6 +64,7 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const run = createHarperRunner({
 			version: 'unused',
 			target: 'https://cluster.example.com/',
+			timeoutMs: 60_000,
 			cliPath,
 			env: { ...process.env, ...identity, HOME: '/home/runner', RUNNER_TEMP: temp },
 		});
@@ -69,6 +79,7 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const run = createHarperRunner({
 			version: 'unused',
 			target: 'https://cluster.example.com/',
+			timeoutMs: 60_000,
 			cliPath,
 			env: { ...process.env, ...identity, RUNNER_TEMP: scratch() },
 		});
@@ -91,6 +102,7 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const run = createHarperRunner({
 			version: 'unused',
 			target: 'https://cluster.example.com/',
+			timeoutMs: 60_000,
 			cliPath,
 			env: { ...process.env, ...identity, EXPECTED_CWD: cwd },
 		});
@@ -111,6 +123,7 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const run = createHarperRunner({
 			version: 'unused',
 			target: 'https://cluster.example.com/',
+			timeoutMs: 60_000,
 			cliPath,
 			env: { ...process.env, ...identity, RUNNER_TEMP: temp },
 		});
@@ -125,6 +138,7 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		const run = createHarperRunner({
 			version: 'unused',
 			target: 'https://cluster.example.com/',
+			timeoutMs: 60_000,
 			cliPath,
 			env: { ...process.env, ...identity },
 		});
@@ -133,8 +147,70 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		deepStrictEqual(JSON.parse(stdout), [branch]);
 	});
 
+	test('stops a command that hangs, and says which one', async () => {
+		const marker = join(scratch(), 'still-running');
+		const cliPath = executable(
+			join(scratch(), 'harper'),
+			`setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, ''), 2000); setInterval(() => {}, 1000);`
+		);
+		const run = createHarperRunner({
+			version: 'unused',
+			target: 'https://x/',
+			timeoutMs: 200,
+			cliPath,
+			env: { ...process.env, ...identity, RUNNER_TEMP: scratch() },
+		});
+		await rejects(run(['preview', 'drop', 'app=shop']), /harper preview drop did not finish within/);
+		await new Promise((done) => setTimeout(done, 2500));
+		strictEqual(existsSync(marker), false, 'the hung command was not stopped');
+	});
+
+	test('prepare installs the CLI without running it', async (context) => {
+		context.mock.method(process.stdout, 'write', () => true);
+		const home = scratch();
+		const npm = executable(
+			join(home, 'bin', 'npm'),
+			`const prefix = process.argv[process.argv.indexOf('--prefix') + 1];
+require('node:fs').mkdirSync(prefix + '/node_modules/.bin', { recursive: true });
+require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/bin/env node\\nrequire("node:fs").writeFileSync(process.env.RAN, "")\\n', { mode: 0o755 });`
+		);
+		const ran = join(home, 'ran');
+		const run = createHarperRunner({
+			version: '5.4.0',
+			target: 'https://x/',
+			timeoutMs: 60_000,
+			env: {
+				...process.env,
+				...identity,
+				RAN: ran,
+				PATH: `${dirname(npm)}${delimiter}${process.env.PATH}`,
+				RUNNER_TEMP: home,
+			},
+		});
+		await run.prepare();
+		context.mock.restoreAll();
+		strictEqual(existsSync(ran), false);
+		ok(
+			existsSync(
+				join(
+					home,
+					readdirSync(home).find((name) => name.startsWith('harper-cli-'))!,
+					'node_modules',
+					'.bin',
+					'harper'
+				)
+			)
+		);
+	});
+
 	test('refuses to run without an identity token, naming the permission', async () => {
-		const run = createHarperRunner({ version: 'unused', target: 'https://x/', cliPath: 'unused', env: {} });
+		const run = createHarperRunner({
+			version: 'unused',
+			target: 'https://x/',
+			timeoutMs: 60_000,
+			cliPath: 'unused',
+			env: {},
+		});
 		await rejects(run(['deploy']), /permissions: id-token: write/);
 	});
 
@@ -156,7 +232,7 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 			RUNNER_TEMP: home,
 			INPUT_GITHUB_TOKEN: 'secret',
 		};
-		const run = createHarperRunner({ version: '>=5.4.0-alpha.1 <6', target: 'https://x/', env });
+		const run = createHarperRunner({ version: '>=5.4.0-alpha.1 <6', target: 'https://x/', timeoutMs: 60_000, env });
 		await run(['one']);
 		await run(['two']);
 		context.mock.restoreAll();
@@ -181,6 +257,7 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 		const run = createHarperRunner({
 			version: '5.4.0',
 			target: 'https://x/',
+			timeoutMs: 60_000,
 			env: {
 				...process.env,
 				...identity,
@@ -197,6 +274,6 @@ require('node:fs').writeFileSync(prefix + '/node_modules/.bin/harper', '#!/usr/b
 		context.mock.method(process.stdout, 'write', () => true);
 		const npm = executable(join(scratch(), 'npm'), 'process.exit(7);');
 		const env = { ...process.env, PATH: `${dirname(npm)}${delimiter}${process.env.PATH}`, RUNNER_TEMP: scratch() };
-		await rejects(installHarperCli('5.4.0', env), /npm could not install harper@5\.4\.0: it exited with 7/);
+		await rejects(installHarperCli('5.4.0', env, 60_000), /npm could not install harper@5\.4\.0: it exited with 7/);
 	});
 });

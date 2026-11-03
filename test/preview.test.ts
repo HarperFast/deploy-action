@@ -34,6 +34,7 @@ suite('runPreview', () => {
 	let notices: string[];
 	let warnings: string[];
 	let delays: number[];
+	let events: string[];
 
 	before(() => fake.start());
 	after(() => fake.stop());
@@ -42,6 +43,7 @@ suite('runPreview', () => {
 		notices = [];
 		warnings = [];
 		delays = [];
+		events = [];
 		fake.comments.length = 0;
 		fake.deployments.length = 0;
 		fake.requests.length = 0;
@@ -65,7 +67,11 @@ suite('runPreview', () => {
 			}),
 			harper: async (args, options) => {
 				calls.push({ args, options });
+				events.push(`harper ${args[1] ?? args[0]}`);
 				return { exitCode: 0, stdout: '', ...script(args) };
+			},
+			prepareHarper: async () => {
+				events.push('prepare');
 			},
 			github: new GitHubApi({ apiUrl: fake.url, token: 'token', repository: REPOSITORY, sleep }),
 			log: {
@@ -309,7 +315,39 @@ suite('runPreview', () => {
 			};
 			const result = await runPreview(harper, 'pull_request_target', pullRequestEvent('opened'));
 			strictEqual(result.outcome, 'deployed');
-			match(warnings[0], /Could not check PR #12 after deploying/);
+			match(warnings[0], /Could not check PR #12/);
+		});
+
+		test("a run whose commit was superseded while it deployed leaves the newer run's report alone", async () => {
+			fake.setPullRequest(12, { state: 'open', sha: NEWER_SHA });
+			await runPreview(
+				context(),
+				'pull_request_target',
+				pullRequestEvent('synchronize', { head: { ref: 'fix/cart', sha: NEWER_SHA, repo: { full_name: REPOSITORY } } })
+			);
+			const newerComment = fake.comments[0].body;
+
+			fake.setPullRequest(12, { state: 'open', sha: SHA }, { state: 'open', sha: NEWER_SHA });
+			const result = await runPreview(context(), 'pull_request_target', pullRequestEvent('synchronize'));
+			strictEqual(result.outcome, 'skipped');
+			strictEqual(fake.comments[0].body, newerComment);
+			deepStrictEqual(statesOf(0), ['in_progress', 'success']);
+			deepStrictEqual(statesOf(1), ['in_progress', 'inactive']);
+			match(notices.at(-1) ?? '', /has moved on/);
+		});
+
+		test('a superseded run that failed still fails, without touching the comment', async () => {
+			fake.setPullRequest(12, { state: 'open', sha: SHA }, { state: 'open', sha: NEWER_SHA });
+			await rejects(
+				runPreview(
+					context(() => ({ exitCode: 1 })),
+					'pull_request_target',
+					pullRequestEvent('opened')
+				),
+				/harper preview deploy exited with 1/
+			);
+			deepStrictEqual(statesOf(), ['in_progress', 'failure']);
+			strictEqual(fake.comments.length, 0);
 		});
 
 		test('a cleanup that finished while the success was being reported still has the last word', async () => {
@@ -443,6 +481,18 @@ suite('runPreview', () => {
 		test('adds no comment to a PR that never had one', async () => {
 			await runPreview(context(), 'pull_request_target', pullRequestEvent('closed'));
 			strictEqual(fake.comments.length, 0);
+		});
+
+		test('installs the CLI before reading the PR, so the drop follows the read at once', async () => {
+			await runPreview(context(), 'pull_request_target', pullRequestEvent('closed'));
+			deepStrictEqual(events, ['prepare', 'harper drop']);
+		});
+
+		test('warns when the PR reopened while its preview was dropped', async () => {
+			fake.setPullRequest(12, { state: 'closed', sha: SHA }, { state: 'open', sha: SHA });
+			const result = await runPreview(context(), 'pull_request_target', pullRequestEvent('closed'));
+			strictEqual(result.outcome, 'dropped');
+			match(warnings[0], /reopened while its preview was dropped/);
 		});
 
 		test('a reopened PR keeps its preview', async () => {

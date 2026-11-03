@@ -7,7 +7,7 @@ branding:
 
 inputs:
   target:
-    description: The cluster's operations API URL, such as https://cluster.example.com:9925/
+    description: The cluster's operations API URL, such as https://cluster.example.com:9925/. Only a loopback address may use http
     required: true
   app:
     description: The application's component name
@@ -50,6 +50,9 @@ inputs:
   harper_version:
     description: The npm version or range of the harper CLI
     default: '>=5.4.0-alpha.1 <6'
+  timeout_minutes:
+    description: The longest each CLI command may run before it is stopped
+    default: '30'
   node_version:
     description: The Node.js version to run the CLI on. Empty uses the one already on the runner
     default: '24'
@@ -94,4 +97,5 @@ runs:
         INPUT_DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}
         INPUT_ARGS: ${{ inputs.args }}
         INPUT_HARPER_VERSION: ${{ inputs.harper_version }}
+        INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}

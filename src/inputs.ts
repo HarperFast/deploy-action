@@ -1,5 +1,6 @@
 const APP_NAME = /^[a-zA-Z0-9-_]+$/;
 const ARGUMENT = /^([a-zA-Z_]\w*)=/;
+const LOOPBACK_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/;
 /** The first release with `harper preview`; `^5.4` would not match it, or any 5.4 prerelease. */
 export const DEFAULT_HARPER_VERSION = '>=5.4.0-alpha.1 <6';
 // The action authenticates with the job's identity token alone, and `target` is its own input.
@@ -48,6 +49,7 @@ export interface Inputs {
 	deploymentEnvironment: string;
 	args: string[];
 	harperVersion: string;
+	timeoutMinutes: number;
 	githubToken: string;
 }
 
@@ -61,6 +63,15 @@ function booleanInput(env: NodeJS.ProcessEnv, name: string, fallback: boolean): 
 	if (value === 'true') return true;
 	if (value === 'false') return false;
 	throw new Error(`Input ${name.toLowerCase()} must be true or false, got ${JSON.stringify(value)}`);
+}
+
+function timeoutInput(env: NodeJS.ProcessEnv): number {
+	const value = optionalInput(env, 'TIMEOUT_MINUTES') ?? '30';
+	const minutes = Number(value);
+	if (!Number.isFinite(minutes) || minutes <= 0) {
+		throw new Error(`Input timeout_minutes must be a positive number, got ${JSON.stringify(value)}`);
+	}
+	return minutes;
 }
 
 function targetInput(env: NodeJS.ProcessEnv): string {
@@ -78,6 +89,11 @@ function targetInput(env: NodeJS.ProcessEnv): string {
 	}
 	if (url.protocol !== 'https:' && url.protocol !== 'http:') {
 		throw new Error(`Input target must be an http or https URL, got ${url.protocol}`);
+	}
+	if (url.protocol === 'http:' && !LOOPBACK_HOST.test(url.hostname)) {
+		throw new Error(
+			`Input target must use https: over http, ${url.hostname} would receive the identity exchange in plaintext`
+		);
 	}
 	if (url.username || url.password) {
 		throw new Error('Input target must not carry credentials: this action authenticates with OIDC only');
@@ -123,6 +139,7 @@ export function readInputs(env: NodeJS.ProcessEnv): Inputs {
 		deploymentEnvironment: optionalInput(env, 'DEPLOYMENT_ENVIRONMENT') ?? `${app}-preview`,
 		args: extraArguments(env),
 		harperVersion: optionalInput(env, 'HARPER_VERSION') ?? DEFAULT_HARPER_VERSION,
+		timeoutMinutes: timeoutInput(env),
 		githubToken: env.INPUT_GITHUB_TOKEN ?? '',
 	};
 }

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { runDeploy, type ActionResult } from './deploy.ts';
 import { GitHubApi } from './githubApi.ts';
-import { createHarperRunner, type RunHarper } from './harperCli.ts';
+import { createHarperRunner, type HarperRunner } from './harperCli.ts';
 import { readInputs, type Inputs } from './inputs.ts';
 import { runPreview } from './preview.ts';
 import { reportError, setOutput, workflowLog } from './workflowCommands.ts';
@@ -12,7 +12,7 @@ function requiredVariable(name: string): string {
 	return value;
 }
 
-async function preview(inputs: Inputs, harper: RunHarper): Promise<ActionResult> {
+async function preview(inputs: Inputs, harper: HarperRunner): Promise<ActionResult> {
 	const repository = requiredVariable('GITHUB_REPOSITORY');
 	const serverUrl = process.env.GITHUB_SERVER_URL ?? 'https://github.com';
 	const sleep = (milliseconds: number) => new Promise<void>((done) => setTimeout(done, milliseconds));
@@ -21,6 +21,7 @@ async function preview(inputs: Inputs, harper: RunHarper): Promise<ActionResult>
 		{
 			inputs,
 			harper,
+			prepareHarper: harper.prepare,
 			github: new GitHubApi({
 				apiUrl: process.env.GITHUB_API_URL ?? 'https://api.github.com',
 				token: inputs.githubToken,
@@ -42,6 +43,7 @@ async function main(): Promise<void> {
 	const harper = createHarperRunner({
 		version: inputs.harperVersion,
 		target: inputs.target,
+		timeoutMs: inputs.timeoutMinutes * 60_000,
 		cliPath: process.env.HARPER_DEPLOY_ACTION_CLI,
 	});
 	const { outcome, url } = inputs.preview ? await preview(inputs, harper) : await runDeploy(inputs, harper);
