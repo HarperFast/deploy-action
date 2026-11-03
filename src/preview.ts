@@ -122,16 +122,20 @@ async function finishDeployment(context: PreviewContext, id: number | undefined,
 
 /**
  * Everything older than an inactive Deployment is inactive, so the scan stops at the first one. Retiring oldest first
- * keeps that true when a run fails partway.
+ * keeps that true when a run fails partway. `olderThan` leaves alone every Deployment created after it.
  */
-async function retireDeployments(context: PreviewContext, pullRequest: number, keep?: number): Promise<void> {
+async function retireDeployments(
+	context: PreviewContext,
+	pullRequest: number,
+	{ keep, olderThan }: { keep?: number; olderThan?: number } = {}
+): Promise<void> {
 	const { github, inputs, runUrl } = context;
 	if (!inputs.githubDeployment) return;
 	await bestEffort(context, 'retire earlier GitHub Deployments', async () => {
 		const task = deploymentTask(inputs.app, pullRequest);
 		const active: number[] = [];
 		for await (const deployment of github.deployments(task, inputs.deploymentEnvironment)) {
-			if (deployment.id === keep) continue;
+			if (deployment.id === keep || (olderThan !== undefined && deployment.id >= olderThan)) continue;
 			if ((await github.latestDeploymentStatus(deployment.id))?.state === 'inactive') break;
 			active.push(deployment.id);
 		}
@@ -176,12 +180,14 @@ async function dropClosedPreview(context: PreviewContext, pullRequest: number): 
 		}
 		const { exitCode } = await harper(dropArguments(inputs.app, pullRequest));
 		if (exitCode === 0) {
+			// Its reopened deploy owns the PR's comment and Deployments now.
 			if ((await readPullRequest(context, pullRequest))?.state === 'open') {
 				log.warning(
 					`PR #${pullRequest} was reopened while its preview was dropped. If its preview is missing, push a commit or rerun its deploy.`
 				);
+			} else {
+				await reportRemoved(context, pullRequest);
 			}
-			await reportRemoved(context, pullRequest);
 			return { outcome: 'dropped' };
 		}
 		lastFailure = `harper preview drop exited with ${exitCode}`;
@@ -255,6 +261,7 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 	}
 	// A newer commit's run reports for this PR now: reporting here could replace its comment and retire its Deployment.
 	if (after && after.head.sha !== sha) {
+		if (!deployFailure && deployment !== undefined) await retireDeployments(context, number, { olderThan: deployment });
 		await finishDeployment(context, deployment, deployFailure ? 'failure' : 'inactive');
 		log.notice(`Not reporting ${short(sha)}: PR #${number} has moved on to ${short(after.head.sha)}.`);
 		if (deployFailure) throw deployFailure;
@@ -270,7 +277,7 @@ async function deployPreview(context: PreviewContext, pullRequest: PullRequestEv
 	const url = stdout.match(PREVIEW_URL)?.[1];
 	if (!url) log.warning('harper preview deploy printed no preview URL');
 	await finishDeployment(context, deployment, 'success', url);
-	await retireDeployments(context, number, deployment);
+	await retireDeployments(context, number, { keep: deployment });
 	const message =
 		`**\`${inputs.app}\` preview:** ${url ?? 'deployed'}\n\n` +
 		`Commit \`${short(sha)}\`, [workflow run](${runUrl}). It updates on each push and is removed when this PR closes.`;

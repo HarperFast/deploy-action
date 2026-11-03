@@ -15,18 +15,23 @@ export interface HarperOptions {
 
 export type RunHarper = (args: string[], options?: HarperOptions) => Promise<HarperResult>;
 
-/** `prepare` installs the CLI without running it, so a later command starts at once. */
 export type HarperRunner = RunHarper & { prepare: () => Promise<void> };
 
 export interface HarperRunnerOptions {
 	version: string;
 	target: string;
 	timeoutMs: number;
+	killGraceMs?: number;
 	cliPath?: string;
 	env?: NodeJS.ProcessEnv;
 }
 
-const KILL_GRACE_MS = 10_000;
+interface ExecuteOptions extends HarperOptions {
+	env: NodeJS.ProcessEnv;
+	label: string;
+	timeoutMs: number;
+	killGraceMs?: number;
+}
 
 // A configured credential outranks the job's identity token in the CLI, and a blank one disables it.
 const CREDENTIAL_VARIABLE = /^(?:HARPER_CLI|CLI_TARGET)_(?:USERNAME|PASSWORD|OPERATION_TOKEN|REFRESH_TOKEN)$/;
@@ -55,30 +60,38 @@ async function assertNoDotenvCredentials(directory: string): Promise<void> {
 	}
 }
 
+/** A stopped command settles only once it has exited, so nothing that follows overlaps it. */
 function execute(
 	command: string,
 	args: string[],
-	{ cwd, env, quiet, label, timeoutMs }: HarperOptions & { env: NodeJS.ProcessEnv; label: string; timeoutMs: number }
+	{ cwd, env, quiet, label, timeoutMs, killGraceMs = 10_000 }: ExecuteOptions
 ): Promise<HarperResult> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'inherit'] });
 		const chunks: Buffer[] = [];
+		let timedOut = false;
+		let killer: NodeJS.Timeout | undefined;
 		const timer = setTimeout(() => {
+			timedOut = true;
 			child.kill('SIGTERM');
-			setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
-			reject(new Error(`${label} did not finish within ${timeoutMs / 60_000} minutes`));
+			killer = setTimeout(() => child.kill('SIGKILL'), killGraceMs);
 		}, timeoutMs);
+		const settled = () => {
+			clearTimeout(timer);
+			clearTimeout(killer);
+		};
 		child.stdout.on('data', (chunk: Buffer) => {
 			chunks.push(chunk);
 			if (!quiet) process.stdout.write(chunk);
 		});
 		child.on('error', (cause) => {
-			clearTimeout(timer);
+			settled();
 			reject(new Error(`Could not run ${command}: ${cause.message}`, { cause }));
 		});
 		child.on('close', (code) => {
-			clearTimeout(timer);
-			resolve({ exitCode: code ?? 1, stdout: Buffer.concat(chunks).toString('utf8') });
+			settled();
+			if (timedOut) reject(new Error(`${label} did not finish within ${timeoutMs / 60_000} minutes`));
+			else resolve({ exitCode: code ?? 1, stdout: Buffer.concat(chunks).toString('utf8') });
 		});
 	});
 }
@@ -112,6 +125,7 @@ export function createHarperRunner({
 	version,
 	target,
 	timeoutMs,
+	killGraceMs,
 	cliPath,
 	env = process.env,
 }: HarperRunnerOptions): HarperRunner {
@@ -139,6 +153,7 @@ export function createHarperRunner({
 			env: cliEnvironment(env, target, home),
 			label: ['harper', ...args.slice(0, 2)].join(' '),
 			timeoutMs,
+			killGraceMs,
 		});
 	};
 	return Object.assign(run, { prepare: async () => void (await prepare()) });

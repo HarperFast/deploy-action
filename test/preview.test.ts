@@ -318,22 +318,40 @@ suite('runPreview', () => {
 			match(warnings[0], /Could not check PR #12/);
 		});
 
-		test("a run whose commit was superseded while it deployed leaves the newer run's report alone", async () => {
-			fake.setPullRequest(12, { state: 'open', sha: NEWER_SHA });
-			await runPreview(
-				context(),
-				'pull_request_target',
-				pullRequestEvent('synchronize', { head: { ref: 'fix/cart', sha: NEWER_SHA, repo: { full_name: REPOSITORY } } })
-			);
-			const newerComment = fake.comments[0].body;
-
-			fake.setPullRequest(12, { state: 'open', sha: SHA }, { state: 'open', sha: NEWER_SHA });
-			const result = await runPreview(context(), 'pull_request_target', pullRequestEvent('synchronize'));
+		test("a run that finishes after a newer commit's run leaves that run's report alone", async () => {
+			const newer = pullRequestEvent('synchronize', {
+				head: { ref: 'fix/cart', sha: NEWER_SHA, repo: { full_name: REPOSITORY } },
+			});
+			const older = context();
+			const deploy = older.harper;
+			older.harper = async (args, options) => {
+				fake.setPullRequest(12, { state: 'open', sha: NEWER_SHA });
+				await runPreview(context(), 'pull_request_target', newer);
+				return deploy(args, options);
+			};
+			const result = await runPreview(older, 'pull_request_target', pullRequestEvent('synchronize'));
 			strictEqual(result.outcome, 'skipped');
-			strictEqual(fake.comments[0].body, newerComment);
-			deepStrictEqual(statesOf(0), ['in_progress', 'success']);
-			deepStrictEqual(statesOf(1), ['in_progress', 'inactive']);
+			match(fake.comments[0].body, new RegExp(`\`${NEWER_SHA.slice(0, 7)}\``));
+			strictEqual(statesOf(0).at(-1), 'inactive');
+			deepStrictEqual(statesOf(1), ['in_progress', 'success']);
 			match(notices.at(-1) ?? '', /has moved on/);
+		});
+
+		test('a superseded run retires the Deployments before it, so none is stranded', async () => {
+			const push = async (sha: string, ...afterwards: string[]) => {
+				fake.setPullRequest(12, ...[sha, ...afterwards].map((head) => ({ state: 'open', sha: head })));
+				const event = pullRequestEvent('synchronize', {
+					head: { ref: 'fix/cart', sha, repo: { full_name: REPOSITORY } },
+				});
+				await runPreview(context(), 'pull_request_target', event);
+			};
+			await push(SHA);
+			await push(NEWER_SHA, 'c'.repeat(40));
+			await push('c'.repeat(40));
+			deepStrictEqual(
+				fake.deployments.map((deployment) => deployment.statuses.at(-1)?.state),
+				['inactive', 'inactive', 'success']
+			);
 		});
 
 		test('a superseded run that failed still fails, without touching the comment', async () => {
@@ -488,11 +506,16 @@ suite('runPreview', () => {
 			deepStrictEqual(events, ['prepare', 'harper drop']);
 		});
 
-		test('warns when the PR reopened while its preview was dropped', async () => {
+		test("leaves a reopened PR's report alone when it reopened during the drop", async () => {
+			fake.setPullRequest(12, { state: 'open', sha: SHA });
+			await runPreview(context(), 'pull_request_target', pullRequestEvent('reopened'));
+			const report = fake.comments[0].body;
 			fake.setPullRequest(12, { state: 'closed', sha: SHA }, { state: 'open', sha: SHA });
 			const result = await runPreview(context(), 'pull_request_target', pullRequestEvent('closed'));
 			strictEqual(result.outcome, 'dropped');
 			match(warnings[0], /reopened while its preview was dropped/);
+			strictEqual(fake.comments[0].body, report);
+			deepStrictEqual(statesOf(), ['in_progress', 'success']);
 		});
 
 		test('a reopened PR keeps its preview', async () => {
