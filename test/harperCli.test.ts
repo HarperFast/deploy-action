@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, ok, rejects, strictEqual } from 'node:assert';
+import { deepStrictEqual, match, ok, rejects, strictEqual, throws } from 'node:assert';
 import {
 	chmodSync,
 	existsSync,
@@ -147,22 +147,26 @@ console.log(JSON.stringify([process.env.HOME, fs.readdirSync(process.env.HOME), 
 		deepStrictEqual(JSON.parse(stdout), [branch]);
 	});
 
-	test('stops a command that hangs, and says which one', async () => {
-		const marker = join(scratch(), 'still-running');
+	test('stops a command that hangs, and settles only once it has exited', async () => {
+		const pidFile = join(scratch(), 'pid');
 		const cliPath = executable(
 			join(scratch(), 'harper'),
-			`setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, ''), 2000); setInterval(() => {}, 1000);`
+			`require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);`
 		);
 		const run = createHarperRunner({
 			version: 'unused',
 			target: 'https://x/',
-			timeoutMs: 200,
+			timeoutMs: 300,
+			killGraceMs: 300,
 			cliPath,
 			env: { ...process.env, ...identity, RUNNER_TEMP: scratch() },
 		});
+		const started = Date.now();
 		await rejects(run(['preview', 'drop', 'app=shop']), /harper preview drop did not finish within/);
-		await new Promise((done) => setTimeout(done, 2500));
-		strictEqual(existsSync(marker), false, 'the hung command was not stopped');
+		ok(Date.now() - started >= 550, 'it settled before the grace period ran out');
+		throws(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0), /ESRCH/);
 	});
 
 	test('prepare installs the CLI without running it', async (context) => {
