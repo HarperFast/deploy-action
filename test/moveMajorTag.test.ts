@@ -35,6 +35,7 @@ suite('moveMajorTag', () => {
 		nextRun = 1;
 		fake.pageSize = 100;
 		fake.releases = [];
+		fake.unlistedReleases = [];
 		fake.refs.clear();
 		fake.tagObjects.clear();
 		fake.branches = new Map([['main', [OLD_SHA, SHA]]]);
@@ -144,6 +145,17 @@ suite('moveMajorTag', () => {
 		deepStrictEqual(warnings, ['v1.2.0 is no longer a published release, so v1 leaves it out']);
 	});
 
+	test('counts a just-published release that the list has not caught up to', async () => {
+		publish('v1.0.0', OLD_SHA);
+		fake.refs.set('tags/v1', { type: 'commit', sha: OLD_SHA });
+		fake.unlistedReleases.push({ tag_name: 'v1.0.1', draft: false, prerelease: false });
+		fake.refs.set('tags/v1.0.1', { type: 'commit', sha: SHA });
+		passCi();
+		strictEqual(await moveMajorTag(options('v1.0.1')), 'moved');
+		deepStrictEqual(fake.refWrites, [{ method: 'PATCH', ref: 'tags/v1', sha: SHA, force: true }]);
+		deepStrictEqual(warnings, []);
+	});
+
 	test('leaves the major tag alone when no published release remains', async () => {
 		publish('v1.0.0', SHA, { draft: true });
 		strictEqual(await moveMajorTag(options('v1.0.0')), 'unchanged');
@@ -173,7 +185,7 @@ suite('moveMajorTag', () => {
 	});
 
 	test('refuses a tag that is not a plain version', async () => {
-		for (const tag of ['v1.0', 'v1.0.0-rc.1', '1.0.0']) {
+		for (const tag of ['v1.0', 'v1.0.0-rc.1', '1.0.0', 'v01.0.0', 'v1.00.0']) {
 			await rejects(moveMajorTag(options(tag)), /is not a vMAJOR\.MINOR\.PATCH release tag/);
 		}
 		strictEqual(fake.requests.length, 0);
@@ -202,7 +214,8 @@ suite('moveMajorTag', () => {
 		deepStrictEqual(fake.refWrites, []);
 	});
 
-	test('judges each workflow by its newest run', async () => {
+	test('judges each workflow by its newest run, across pages', async () => {
+		fake.pageSize = 1;
 		publish('v1.0.0');
 		run(CI, 'success');
 		run(E2E, 'failure');

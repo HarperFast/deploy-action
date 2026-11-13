@@ -1,6 +1,6 @@
 import { reportError, workflowLog, type WorkflowLog } from '../src/workflowCommands.ts';
 
-const RELEASE_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
+const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 export interface MoveMajorTagOptions {
 	apiUrl: string;
@@ -66,15 +66,19 @@ function createClient({ apiUrl, token, repository }: MoveMajorTagOptions) {
 		async json<T>(method: string, path: string, body?: unknown): Promise<T> {
 			return (await send(method, `${base}${path}`, body)).json() as Promise<T>;
 		},
-		async ref(name: string): Promise<GitObject | undefined> {
-			const response = await send('GET', `${base}/git/ref/${name}`, undefined, true);
-			return response.status === 404 ? undefined : ((await response.json()) as { object: GitObject }).object;
+		async optional<T>(path: string): Promise<T | undefined> {
+			const response = await send('GET', `${base}${path}`, undefined, true);
+			return response.status === 404 ? undefined : ((await response.json()) as T);
 		},
-		async *pages<T>(path: string): AsyncGenerator<T> {
+		async ref(name: string): Promise<GitObject | undefined> {
+			return (await this.optional<{ object: GitObject }>(`/git/ref/${name}`))?.object;
+		},
+		async *pages<T>(path: string, field?: string): AsyncGenerator<T> {
 			let url: string | undefined = `${base}${path}`;
 			while (url) {
 				const response: Response = await send('GET', url);
-				yield* (await response.json()) as T[];
+				const body = (await response.json()) as T[] | Record<string, T[]>;
+				yield* Array.isArray(body) ? body : body[field!];
 				url = response.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
 			}
 		},
@@ -83,15 +87,22 @@ function createClient({ apiUrl, token, repository }: MoveMajorTagOptions) {
 
 type Client = ReturnType<typeof createClient>;
 
+function isPublished(release: Release | undefined): release is Release {
+	return release !== undefined && !release.draft && !release.prerelease;
+}
+
 async function newestRelease(client: Client, tag: string, major: number) {
-	let newest: { tag: string; version: Version } | undefined;
-	let listed = false;
+	const tags = new Set<string>();
 	for await (const release of client.pages<Release>('/releases?per_page=100')) {
-		const candidate = parseVersion(release.tag_name);
-		if (release.draft || release.prerelease || candidate?.[0] !== major) continue;
-		listed ||= release.tag_name === tag;
-		if (!newest || compareVersions(candidate, newest.version) > 0)
-			newest = { tag: release.tag_name, version: candidate };
+		if (isPublished(release) && parseVersion(release.tag_name)?.[0] === major) tags.add(release.tag_name);
+	}
+	// The list can lag a just-published release, so its own record decides whether it still counts.
+	const listed = tags.has(tag) || isPublished(await client.optional<Release>(`/releases/tags/${tag}`));
+	if (listed) tags.add(tag);
+	let newest: { tag: string; version: Version } | undefined;
+	for (const candidate of tags) {
+		const version = parseVersion(candidate)!;
+		if (!newest || compareVersions(version, newest.version) > 0) newest = { tag: candidate, version };
 	}
 	return { newest: newest?.tag, listed };
 }
@@ -114,7 +125,8 @@ async function assertWorkflowsPassed(
 	options: MoveMajorTagOptions
 ): Promise<void> {
 	const query = new URLSearchParams({ head_sha: sha, event: 'push', branch: options.branch, per_page: '100' });
-	const { workflow_runs: runs } = await client.json<{ workflow_runs: WorkflowRun[] }>('GET', `/actions/runs?${query}`);
+	const runs: WorkflowRun[] = [];
+	for await (const run of client.pages<WorkflowRun>(`/actions/runs?${query}`, 'workflow_runs')) runs.push(run);
 	const failing = options.requiredWorkflows.filter((path) => {
 		const latest = runs.filter((run) => run.path === path).sort((left, right) => right.id - left.id)[0];
 		return latest?.conclusion !== 'success';

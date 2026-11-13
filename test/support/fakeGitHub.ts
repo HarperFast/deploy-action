@@ -59,6 +59,8 @@ export class FakeGitHub {
 	comments: FakeComment[] = [];
 	deployments: FakeDeployment[] = [];
 	releases: FakeRelease[] = [];
+	/** Found by tag but not yet in the release list, as when the list lags a publication. */
+	unlistedReleases: FakeRelease[] = [];
 	/** Keyed like `tags/v1`. */
 	refs = new Map<string, FakeGitObject>();
 	tagObjects = new Map<string, FakeGitObject>();
@@ -107,7 +109,7 @@ export class FakeGitHub {
 		return comment;
 	}
 
-	#page(response: ServerResponse, url: URL, items: unknown[]): void {
+	#page(response: ServerResponse, url: URL, items: unknown[], field?: string): void {
 		const size = Math.min(Number(url.searchParams.get('per_page') ?? 30), this.pageSize);
 		const page = Number(url.searchParams.get('page') ?? 1);
 		const headers: Record<string, string> = { 'content-type': 'application/json' };
@@ -117,7 +119,8 @@ export class FakeGitHub {
 			headers.link = `<${next}>; rel="next"`;
 		}
 		response.writeHead(200, headers);
-		response.end(JSON.stringify(items.slice((page - 1) * size, page * size)));
+		const slice = items.slice((page - 1) * size, page * size);
+		response.end(JSON.stringify(field ? { total_count: items.length, [field]: slice } : slice));
 	}
 
 	#json(response: ServerResponse, status: number, body: unknown): void {
@@ -182,6 +185,11 @@ export class FakeGitHub {
 			return this.#json(response, 201, body);
 		}
 		if (route === 'GET /releases') return this.#page(response, url, this.releases);
+		if ((match = route.match(/^GET \/releases\/tags\/(.+)$/))) {
+			const release = [...this.releases, ...this.unlistedReleases].find(({ tag_name }) => tag_name === match![1]);
+			if (!release) return this.#json(response, 404, { message: 'Not Found' });
+			return this.#json(response, 200, release);
+		}
 		if ((match = route.match(/^GET \/git\/ref\/(.+)$/))) {
 			const object = this.refs.get(match[1]);
 			if (!object) return this.#json(response, 404, { message: 'Not Found' });
@@ -217,7 +225,7 @@ export class FakeGitHub {
 					run.event === url.searchParams.get('event') &&
 					run.head_branch === url.searchParams.get('branch')
 			);
-			return this.#json(response, 200, { total_count: workflow_runs.length, workflow_runs });
+			return this.#page(response, url, workflow_runs, 'workflow_runs');
 		}
 		return this.#json(response, 404, { message: `No fake for ${route}` });
 	}
