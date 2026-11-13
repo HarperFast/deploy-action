@@ -1,4 +1,4 @@
-import { workflowLog, type WorkflowLog } from '../src/workflowCommands.ts';
+import { reportError, workflowLog, type WorkflowLog } from '../src/workflowCommands.ts';
 
 const RELEASE_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 
@@ -12,7 +12,7 @@ export interface MoveMajorTagOptions {
 	log: WorkflowLog;
 }
 
-export type MoveOutcome = 'created' | 'moved' | 'unchanged' | 'kept';
+type MoveOutcome = 'created' | 'moved' | 'unchanged';
 
 interface Release {
 	tag_name: string;
@@ -20,14 +20,14 @@ interface Release {
 	prerelease: boolean;
 }
 
-interface GitRef {
-	object: { type: string; sha: string };
+interface GitObject {
+	type: string;
+	sha: string;
 }
 
 interface WorkflowRun {
 	id: number;
 	path: string;
-	status: string;
 	conclusion: string | null;
 }
 
@@ -44,7 +44,7 @@ function compareVersions(left: Version, right: Version): number {
 
 function createClient({ apiUrl, token, repository }: MoveMajorTagOptions) {
 	const base = `${apiUrl.replace(/\/+$/, '')}/repos/${repository}`;
-	async function send(method: string, url: string, body?: unknown): Promise<Response> {
+	async function send(method: string, url: string, body?: unknown, allowMissing = false): Promise<Response> {
 		const response = await fetch(url, {
 			method,
 			headers: {
@@ -57,15 +57,18 @@ function createClient({ apiUrl, token, repository }: MoveMajorTagOptions) {
 			body: body === undefined ? undefined : JSON.stringify(body),
 			signal: AbortSignal.timeout(30_000),
 		});
-		if (response.ok || (method === 'GET' && response.status === 404)) return response;
+		if (response.ok || (allowMissing && response.status === 404)) return response;
 		throw new Error(
 			`${method} ${new URL(url).pathname} answered ${response.status}: ${(await response.text()).slice(0, 300)}`
 		);
 	}
 	return {
-		async json<T>(method: string, path: string, body?: unknown): Promise<T | undefined> {
-			const response = await send(method, `${base}${path}`, body);
-			return response.status === 404 ? undefined : ((await response.json()) as T);
+		async json<T>(method: string, path: string, body?: unknown): Promise<T> {
+			return (await send(method, `${base}${path}`, body)).json() as Promise<T>;
+		},
+		async ref(name: string): Promise<GitObject | undefined> {
+			const response = await send('GET', `${base}/git/ref/${name}`, undefined, true);
+			return response.status === 404 ? undefined : ((await response.json()) as { object: GitObject }).object;
 		},
 		async *pages<T>(path: string): AsyncGenerator<T> {
 			let url: string | undefined = `${base}${path}`;
@@ -90,36 +93,37 @@ async function newestRelease(client: Client, tag: string, version: Version): Pro
 	return newest.tag;
 }
 
-async function commitOf(client: Client, tag: string): Promise<string> {
-	let object = (await client.json<GitRef>('GET', `/git/ref/tags/${tag}`))?.object;
-	while (object?.type === 'tag') object = (await client.json<GitRef>('GET', `/git/tags/${object.sha}`))?.object;
-	if (object?.type !== 'commit') throw new Error(`${tag} does not point to a commit`);
-	return object.sha;
+async function peel(client: Client, object: GitObject | undefined): Promise<string | undefined> {
+	while (object?.type === 'tag')
+		object = (await client.json<{ object: GitObject }>('GET', `/git/tags/${object.sha}`)).object;
+	return object?.type === 'commit' ? object.sha : undefined;
 }
 
 async function assertOnBranch(client: Client, sha: string, branch: string, tag: string): Promise<void> {
-	const comparison = await client.json<{ status: string }>('GET', `/compare/${sha}...${encodeURIComponent(branch)}`);
-	if (comparison?.status !== 'ahead' && comparison?.status !== 'identical') {
-		throw new Error(`${tag} (${sha.slice(0, 7)}) is not on ${branch}`);
-	}
+	const { status } = await client.json<{ status: string }>('GET', `/compare/${sha}...${encodeURIComponent(branch)}`);
+	if (status !== 'ahead' && status !== 'identical') throw new Error(`${tag} (${sha.slice(0, 7)}) is not on ${branch}`);
 }
 
-async function assertWorkflowsPassed(client: Client, sha: string, options: MoveMajorTagOptions): Promise<void> {
+async function assertWorkflowsPassed(
+	client: Client,
+	sha: string,
+	tag: string,
+	options: MoveMajorTagOptions
+): Promise<void> {
 	const query = new URLSearchParams({ head_sha: sha, event: 'push', branch: options.branch, per_page: '100' });
-	const runs =
-		(await client.json<{ workflow_runs: WorkflowRun[] }>('GET', `/actions/runs?${query}`))?.workflow_runs ?? [];
-	const unfinished = options.requiredWorkflows.filter((path) => {
+	const { workflow_runs: runs } = await client.json<{ workflow_runs: WorkflowRun[] }>('GET', `/actions/runs?${query}`);
+	const failing = options.requiredWorkflows.filter((path) => {
 		const latest = runs.filter((run) => run.path === path).sort((left, right) => right.id - left.id)[0];
 		return latest?.conclusion !== 'success';
 	});
-	if (unfinished.length > 0) {
+	if (failing.length > 0) {
 		throw new Error(
-			`${options.tag} (${sha.slice(0, 7)}) has no passing push run of ${unfinished.join(', ')} on ${options.branch}; re-run this job once it passes`
+			`${tag} (${sha.slice(0, 7)}) has no passing push run of ${failing.join(', ')} on ${options.branch}; re-run this job once it passes`
 		);
 	}
 }
 
-/** Points `vMAJOR` at a newly published `vMAJOR.MINOR.PATCH` release, unless a newer release in that major already holds it. */
+// A run follows the newest release, not the one that triggered it, because GitHub drops a pending run when the next one queues.
 export async function moveMajorTag(options: MoveMajorTagOptions): Promise<MoveOutcome> {
 	const { tag, log } = options;
 	const version = parseVersion(tag);
@@ -128,26 +132,24 @@ export async function moveMajorTag(options: MoveMajorTagOptions): Promise<MoveOu
 	const client = createClient(options);
 
 	const newest = await newestRelease(client, tag, version);
-	if (newest !== tag) {
-		log.notice(`${major} stays with ${newest}, which is newer than ${tag}`);
-		return 'kept';
-	}
-	const sha = await commitOf(client, tag);
-	await assertOnBranch(client, sha, options.branch, tag);
-	await assertWorkflowsPassed(client, sha, options);
+	if (newest !== tag) log.notice(`${major} follows ${newest}, which is newer than ${tag}`);
+	const sha = await peel(client, await client.ref(`tags/${newest}`));
+	if (!sha) throw new Error(`${newest} does not point to a commit`);
+	await assertOnBranch(client, sha, options.branch, newest);
+	await assertWorkflowsPassed(client, sha, newest, options);
 
-	const current = (await client.json<GitRef>('GET', `/git/ref/tags/${major}`))?.object.sha;
-	if (current === sha) {
-		log.notice(`${major} already points to ${tag} (${sha.slice(0, 7)})`);
+	const current = await client.ref(`tags/${major}`);
+	if ((await peel(client, current)) === sha) {
+		log.notice(`${major} already points to ${newest} (${sha.slice(0, 7)})`);
 		return 'unchanged';
 	}
-	if (current === undefined) {
-		await client.json('POST', '/git/refs', { ref: `refs/tags/${major}`, sha });
-	} else {
+	if (current) {
 		await client.json('PATCH', `/git/refs/tags/${major}`, { sha, force: true });
+	} else {
+		await client.json('POST', '/git/refs', { ref: `refs/tags/${major}`, sha });
 	}
-	log.notice(`${major} now points to ${tag} (${sha.slice(0, 7)})`);
-	return current === undefined ? 'created' : 'moved';
+	log.notice(`${major} now points to ${newest} (${sha.slice(0, 7)})`);
+	return current ? 'moved' : 'created';
 }
 
 function requiredVariable(name: string): string {
@@ -157,13 +159,18 @@ function requiredVariable(name: string): string {
 }
 
 if (import.meta.main) {
-	await moveMajorTag({
-		apiUrl: process.env.GITHUB_API_URL ?? 'https://api.github.com',
-		token: requiredVariable('GITHUB_TOKEN'),
-		repository: requiredVariable('GITHUB_REPOSITORY'),
-		tag: requiredVariable('RELEASE_TAG'),
-		branch: 'main',
-		requiredWorkflows: ['.github/workflows/ci.yaml', '.github/workflows/e2e.yaml'],
-		log: workflowLog,
-	});
+	try {
+		await moveMajorTag({
+			apiUrl: process.env.GITHUB_API_URL ?? 'https://api.github.com',
+			token: requiredVariable('GITHUB_TOKEN'),
+			repository: requiredVariable('GITHUB_REPOSITORY'),
+			tag: requiredVariable('RELEASE_TAG'),
+			branch: 'main',
+			requiredWorkflows: ['.github/workflows/ci.yaml', '.github/workflows/e2e.yaml'],
+			log: workflowLog,
+		});
+	} catch (error) {
+		reportError(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	}
 }
