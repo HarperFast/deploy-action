@@ -3,7 +3,7 @@ description: Deploy a Harper application with GitHub's OIDC identity, or run its
 author: HarperFast
 branding:
   icon: upload-cloud
-  color: green
+  color: purple
 
 inputs:
   target:
