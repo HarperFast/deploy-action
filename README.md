@@ -282,7 +282,7 @@ Start from `permissions: {}` at the top of the workflow, as the examples do. A n
 ## Releasing
 
 1. On the [new release page](https://github.com/HarperFast/deploy-action/releases/new), type the next tag (`v1.2.3`) on `main`, click "Generate release notes", and tick "Publish this Action to the GitHub Marketplace". GitHub has no API for that checkbox.
-2. Publish. The [Release workflow](.github/workflows/release.yaml) then points `v1` at the release, once that commit's CI and E2E runs on `main` have passed. If they haven't yet, re-run the workflow after they do. A patch to an older minor version leaves `v1` where it is.
+2. Publish. The [Release workflow](.github/workflows/release.yaml) then points `v1` at the newest `v1.x.y` release, once the latest CI and E2E runs for its commit on `main` have passed. If they haven't, get them green and re-run the Release workflow. A patch to an older minor version leaves `v1` on the newer release, and promoting a prerelease counts as publishing it.
 
 ## License
 

@@ -23,13 +23,13 @@ export interface FakeDeployment {
 	[field: string]: unknown;
 }
 
-export interface FakeRelease {
+interface FakeRelease {
 	tag_name: string;
 	draft: boolean;
 	prerelease: boolean;
 }
 
-export interface FakeGitObject {
+interface FakeGitObject {
 	type: 'commit' | 'tag';
 	sha: string;
 }
@@ -62,7 +62,8 @@ export class FakeGitHub {
 	/** Keyed like `tags/v1`. */
 	refs = new Map<string, FakeGitObject>();
 	tagObjects = new Map<string, FakeGitObject>();
-	branchCommits = new Set<string>();
+	/** Oldest first; the last commit is the branch's head. */
+	branches = new Map<string, string[]>();
 	workflowRuns: FakeWorkflowRun[] = [];
 	refWrites: { method: string; ref: string; sha: string; force?: boolean }[] = [];
 	#pullRequests = new Map<number, PullRequestSnapshot[]>();
@@ -205,7 +206,9 @@ export class FakeGitHub {
 			return this.#json(response, 200, { ref: `refs/${match[1]}`, object: { type: 'commit', sha: body.sha } });
 		}
 		if ((match = route.match(/^GET \/compare\/([0-9a-f]+)\.\.\.(.+)$/))) {
-			return this.#json(response, 200, { status: this.branchCommits.has(match[1]) ? 'ahead' : 'diverged' });
+			const commits = this.branches.get(decodeURIComponent(match[2])) ?? [];
+			const status = commits.at(-1) === match[1] ? 'identical' : commits.includes(match[1]) ? 'ahead' : 'diverged';
+			return this.#json(response, 200, { status });
 		}
 		if (route === 'GET /actions/runs') {
 			const workflow_runs = this.workflowRuns.filter(
