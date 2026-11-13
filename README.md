@@ -279,6 +279,11 @@ Start from `permissions: {}` at the top of the workflow, as the examples do. A n
 - `.github/workflows/preview.yaml` is the workflow name the default policies pin. Another name needs `workflow=` on `harper preview setup`.
 - Each application on a cluster needs its own preview slug: when two applications preview the same branch name, set `label` on one of them.
 
+## Releasing
+
+1. On the [new release page](https://github.com/HarperFast/deploy-action/releases/new), type the next tag (`v1.2.3`) on `main`, click "Generate release notes", and tick "Publish this Action to the GitHub Marketplace". GitHub has no API for that checkbox.
+2. Publish. The [Release workflow](.github/workflows/release.yaml) then points `v1` at the release, once that commit's CI and E2E runs on `main` have passed. If they haven't yet, re-run the workflow after they do. A patch to an older minor version leaves `v1` where it is.
+
 ## License
 
 [Apache-2.0](LICENSE)

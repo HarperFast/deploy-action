@@ -23,7 +23,7 @@ jobs:
         run: >-
           docker run --rm --volume "$PWD:/repository" --workdir /repository
           rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
-          .github/workflows/ci.yaml .github/workflows/e2e.yaml .github/workflows/preview.yaml
+          .github/workflows/ci.yaml .github/workflows/e2e.yaml .github/workflows/preview.yaml .github/workflows/release.yaml
           examples/deploy.yaml examples/preview.yaml examples/preview-sweep.yaml
       - run: shellcheck test/e2e/*.sh
   test:
