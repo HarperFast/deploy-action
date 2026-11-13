@@ -24,12 +24,14 @@ function runStep(env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdou
 suite('moveMajorTag', () => {
 	const fake = new FakeGitHub();
 	let notices: string[];
+	let warnings: string[];
 	let nextRun: number;
 
 	before(() => fake.start());
 	after(() => fake.stop());
 	beforeEach(() => {
 		notices = [];
+		warnings = [];
 		nextRun = 1;
 		fake.pageSize = 100;
 		fake.releases = [];
@@ -72,7 +74,7 @@ suite('moveMajorTag', () => {
 			tag,
 			branch: 'main',
 			requiredWorkflows: [CI, E2E],
-			log: { notice: (message) => notices.push(message), warning: () => {} },
+			log: { notice: (message) => notices.push(message), warning: (message) => warnings.push(message) },
 		};
 	}
 
@@ -130,6 +132,23 @@ suite('moveMajorTag', () => {
 		publish('v1.1.1', BACKPORT_SHA);
 		strictEqual(await moveMajorTag(options('v1.1.1')), 'moved');
 		deepStrictEqual(fake.refWrites, [{ method: 'PATCH', ref: 'tags/v1', sha: SHA, force: true }]);
+	});
+
+	test('leaves out a triggering release that is no longer published', async () => {
+		publish('v1.1.0', OLD_SHA);
+		passCi(OLD_SHA);
+		publish('v1.2.0', SHA, { prerelease: true });
+		fake.refs.set('tags/v1', { type: 'commit', sha: SHA });
+		strictEqual(await moveMajorTag(options('v1.2.0')), 'moved');
+		deepStrictEqual(fake.refWrites, [{ method: 'PATCH', ref: 'tags/v1', sha: OLD_SHA, force: true }]);
+		deepStrictEqual(warnings, ['v1.2.0 is no longer a published release, so v1 leaves it out']);
+	});
+
+	test('leaves the major tag alone when no published release remains', async () => {
+		publish('v1.0.0', SHA, { draft: true });
+		strictEqual(await moveMajorTag(options('v1.0.0')), 'unchanged');
+		deepStrictEqual(fake.refWrites, []);
+		deepStrictEqual(notices, ['v1 has no published release to follow']);
 	});
 
 	test('compares versions numerically, across pages, ignoring drafts, prereleases and other majors', async () => {

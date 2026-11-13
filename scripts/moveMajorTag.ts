@@ -83,14 +83,17 @@ function createClient({ apiUrl, token, repository }: MoveMajorTagOptions) {
 
 type Client = ReturnType<typeof createClient>;
 
-async function newestRelease(client: Client, tag: string, version: Version): Promise<string> {
-	let newest = { tag, version };
+async function newestRelease(client: Client, tag: string, major: number) {
+	let newest: { tag: string; version: Version } | undefined;
+	let listed = false;
 	for await (const release of client.pages<Release>('/releases?per_page=100')) {
 		const candidate = parseVersion(release.tag_name);
-		if (release.draft || release.prerelease || candidate?.[0] !== version[0]) continue;
-		if (compareVersions(candidate, newest.version) > 0) newest = { tag: release.tag_name, version: candidate };
+		if (release.draft || release.prerelease || candidate?.[0] !== major) continue;
+		listed ||= release.tag_name === tag;
+		if (!newest || compareVersions(candidate, newest.version) > 0)
+			newest = { tag: release.tag_name, version: candidate };
 	}
-	return newest.tag;
+	return { newest: newest?.tag, listed };
 }
 
 async function peel(client: Client, object: GitObject | undefined): Promise<string | undefined> {
@@ -131,8 +134,13 @@ export async function moveMajorTag(options: MoveMajorTagOptions): Promise<MoveOu
 	const major = `v${version[0]}`;
 	const client = createClient(options);
 
-	const newest = await newestRelease(client, tag, version);
-	if (newest !== tag) log.notice(`${major} follows ${newest}, which is newer than ${tag}`);
+	const { newest, listed } = await newestRelease(client, tag, version[0]);
+	if (!listed) log.warning(`${tag} is no longer a published release, so ${major} leaves it out`);
+	if (!newest) {
+		log.notice(`${major} has no published release to follow`);
+		return 'unchanged';
+	}
+	if (listed && newest !== tag) log.notice(`${major} follows ${newest}, which is newer than ${tag}`);
 	const sha = await peel(client, await client.ref(`tags/${newest}`));
 	if (!sha) throw new Error(`${newest} does not point to a commit`);
 	await assertOnBranch(client, sha, options.branch, newest);
