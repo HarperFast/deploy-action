@@ -23,6 +23,27 @@ export interface FakeDeployment {
 	[field: string]: unknown;
 }
 
+export interface FakeRelease {
+	tag_name: string;
+	draft: boolean;
+	prerelease: boolean;
+}
+
+export interface FakeGitObject {
+	type: 'commit' | 'tag';
+	sha: string;
+}
+
+export interface FakeWorkflowRun {
+	id: number;
+	path: string;
+	head_sha: string;
+	head_branch: string;
+	event: string;
+	status: string;
+	conclusion: string | null;
+}
+
 const REPOSITORY_ROUTE = /^\/repos\/[^/]+\/[^/]+(\/.*)$/;
 
 async function readJson(request: IncomingMessage): Promise<any> {
@@ -37,6 +58,13 @@ export class FakeGitHub {
 	requests: string[] = [];
 	comments: FakeComment[] = [];
 	deployments: FakeDeployment[] = [];
+	releases: FakeRelease[] = [];
+	/** Keyed like `tags/v1`. */
+	refs = new Map<string, FakeGitObject>();
+	tagObjects = new Map<string, FakeGitObject>();
+	branchCommits = new Set<string>();
+	workflowRuns: FakeWorkflowRun[] = [];
+	refWrites: { method: string; ref: string; sha: string; force?: boolean }[] = [];
 	#pullRequests = new Map<number, PullRequestSnapshot[]>();
 	#failures: { pattern: RegExp; status: number }[] = [];
 	#nextId = 1000;
@@ -151,6 +179,42 @@ export class FakeGitHub {
 			if (match[1] === 'GET') return this.#page(response, url, deployment.statuses.toReversed());
 			deployment.statuses.push(body);
 			return this.#json(response, 201, body);
+		}
+		if (route === 'GET /releases') return this.#page(response, url, this.releases);
+		if ((match = route.match(/^GET \/git\/ref\/(.+)$/))) {
+			const object = this.refs.get(match[1]);
+			if (!object) return this.#json(response, 404, { message: 'Not Found' });
+			return this.#json(response, 200, { ref: `refs/${match[1]}`, object });
+		}
+		if ((match = route.match(/^GET \/git\/tags\/([0-9a-f]+)$/))) {
+			const object = this.tagObjects.get(match[1]);
+			if (!object) return this.#json(response, 404, { message: 'Not Found' });
+			return this.#json(response, 200, { sha: match[1], object });
+		}
+		if (route === 'POST /git/refs') {
+			const ref = body.ref.replace(/^refs\//, '');
+			if (this.refs.has(ref)) return this.#json(response, 422, { message: 'Reference already exists' });
+			this.refs.set(ref, { type: 'commit', sha: body.sha });
+			this.refWrites.push({ method: 'POST', ref, sha: body.sha });
+			return this.#json(response, 201, { ref: body.ref, object: { type: 'commit', sha: body.sha } });
+		}
+		if ((match = route.match(/^PATCH \/git\/refs\/(.+)$/))) {
+			if (!this.refs.has(match[1])) return this.#json(response, 422, { message: 'Reference does not exist' });
+			this.refs.set(match[1], { type: 'commit', sha: body.sha });
+			this.refWrites.push({ method: 'PATCH', ref: match[1], sha: body.sha, force: body.force });
+			return this.#json(response, 200, { ref: `refs/${match[1]}`, object: { type: 'commit', sha: body.sha } });
+		}
+		if ((match = route.match(/^GET \/compare\/([0-9a-f]+)\.\.\.(.+)$/))) {
+			return this.#json(response, 200, { status: this.branchCommits.has(match[1]) ? 'ahead' : 'diverged' });
+		}
+		if (route === 'GET /actions/runs') {
+			const workflow_runs = this.workflowRuns.filter(
+				(run) =>
+					run.head_sha === url.searchParams.get('head_sha') &&
+					run.event === url.searchParams.get('event') &&
+					run.head_branch === url.searchParams.get('branch')
+			);
+			return this.#json(response, 200, { total_count: workflow_runs.length, workflow_runs });
 		}
 		return this.#json(response, 404, { message: `No fake for ${route}` });
 	}
