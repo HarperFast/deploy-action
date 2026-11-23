@@ -58,6 +58,8 @@ Commit this as `.github/workflows/preview.yaml` on your default branch. GitHub r
 ```yaml
 name: Preview
 on:
+  # Public repos: allow pull_request_target for this workflow in Settings > Actions > Policies
+  # (private/internal repos unaffected): https://github.com/HarperFast/deploy-action#allowing-pull_request_target
   pull_request_target:
     types: [opened, reopened, synchronize, closed]
     branches: [main]
@@ -111,7 +113,7 @@ Some setup options have a matching input:
 | `dataMode=shared`      | `branched_databases: false` |
 | `credential=true`      | `credential: true`          |
 
-A public repository also has to [allow `pull_request_target`](#allowing-pull_request_target).
+In a public repository, also [allow `pull_request_target`](#allowing-pull_request_target) for `.github/workflows/preview.yaml` in **Settings > Actions > Policies**.
 
 ### What each event does
 
@@ -190,13 +192,13 @@ With a package the commit is still recorded on the preview. For a directory, als
 
 ## Allowing `pull_request_target`
 
-GitHub's [workflow execution protections](https://docs.github.com/en/actions/concepts/about-actions-policies) add a default policy that blocks `pull_request_target` in public repositories that have no applicable event policy. It does not apply to private or internal repositories. GitHub first announced enforcement for November 2, 2026, and [moved it to December 2, 2026](https://github.blog/changelog/2026-09-17-workflow-execution-protections-in-github-actions-generally-available/). Once enforced, a blocked run fails with an error.
+GitHub's [workflow execution protections](https://docs.github.com/en/actions/concepts/about-actions-policies) add a default policy that blocks `pull_request_target` in public repositories on github.com that have no applicable event policy. It does not apply to private or internal repositories, or to GitHub Enterprise Server. GitHub first announced enforcement for November 2, 2026, and [moved it to December 2, 2026](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2). Once enforced, a blocked run fails with an error.
 
-To keep previews working in a public repository, allow the event for the preview workflow. The policy lives on each repository, and needs a repository admin. An organization owner can write one that covers several repositories instead.
+To keep previews working in a public repository, allow the event for the preview workflow. A repository admin can configure this at the repository level in **Settings > Actions > Policies** — including on public repositories owned by personal (non-organization) accounts. For organization-owned repositories, an organization owner can instead create one policy in the organization's **Settings > Actions > Policies** (or via the [Actions policies REST API](https://docs.github.com/en/rest/actions/policies) at `POST /orgs/ORG/actions/policies`, with a `repository_name`, `repository_id`, or `repository_property` condition alongside `workflow_path`) covering multiple repositories.
 
 ### From the command line
 
-[`examples/preview-actions-policy.json`](examples/preview-actions-policy.json) is that policy. Create it with `jq` and the `gh` CLI, replacing `OWNER/REPO`:
+[`examples/preview-actions-policy.json`](examples/preview-actions-policy.json) is that repository-level policy. Create it with `jq` and the `gh` CLI, replacing `OWNER/REPO`:
 
 ```bash
 curl --fail --silent --show-error --location https://raw.githubusercontent.com/HarperFast/deploy-action/main/examples/preview-actions-policy.json | jq '{name, enforcement, conditions, rules}' | gh api --method POST repos/OWNER/REPO/actions/policies --header 'X-GitHub-Api-Version: 2026-03-10' --input -

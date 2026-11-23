@@ -1,5 +1,7 @@
 name: Preview
 on:
+  # Public repos: allow pull_request_target for this workflow in Settings > Actions > Policies
+  # (private/internal repos unaffected): https://github.com/HarperFast/deploy-action#allowing-pull_request_target
   pull_request_target:
     types: [opened, reopened, synchronize, closed]
     branches: [main]
